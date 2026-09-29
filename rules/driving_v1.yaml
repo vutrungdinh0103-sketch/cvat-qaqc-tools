@@ -1,0 +1,140 @@
+# ---------------------------------------------------------------------------
+# Cấu hình rule QA/QC (bản mẫu cho dự án "driving v1")
+#
+# Cách dùng:
+#   python -m qaqc validate rules/driving_v1.yaml
+#   python -m qaqc run 42 --rules rules/driving_v1.yaml -o reports/task_42.json
+#   python -m qaqc publish 42 --rules rules/driving_v1.yaml --publish-severity error
+#
+# Ghi đè nhanh từ CLI (không cần sửa file):
+#   python -m qaqc run 42 --rules rules/driving_v1.yaml --param duplicate_bbox.iou_threshold=0.9
+#   python -m qaqc run 42 --rules rules/driving_v1.yaml --only invalid_size,duplicate_bbox
+#
+# Lưu ý: `defaults.severity` cố ý để trống để mỗi rule dùng mức độ mặc định của
+# chính nó (invalid_size/duplicate_bbox/... = error, tiny_box/track_gap = warning).
+# ---------------------------------------------------------------------------
+version: 1
+name: driving_v1
+description: >-
+  Bộ rule QA/QC cho annotation giao thông: lỗi hình học (kích thước, tràn khung,
+  box quá nhỏ, trùng lặp, biển số nằm ngoài xe), lỗi đầy đủ (thiếu nhãn, thiếu
+  attribute, nhãn lạ) và lỗi theo thời gian (đứt keyframe, đổi class giữa track).
+
+defaults:
+  enabled: true
+  # severity: warning   # bỏ comment nếu muốn mọi rule mặc định là warning
+
+rules:
+  # --- Nhóm hình học ---------------------------------------------------------
+  invalid_size:
+    enabled: true
+    severity: error
+
+  out_of_frame:
+    enabled: true
+    severity: error
+    params:
+      tolerance_px: 1.0          # cho phép lệch 1px do làm tròn khi kéo box
+      min_visible_ratio: 0.3     # box phải nhìn thấy >= 30% diện tích
+      shape_types: [rectangle, polygon, polyline, points, ellipse, cuboid]
+
+  tiny_box:
+    enabled: true
+    severity: warning
+    params:
+      min_area_px: 25            # box < 25px² (5x5) thường là click nhầm
+      min_side_px: 3
+
+  duplicate_bbox:
+    enabled: true
+    severity: error
+    params:
+      iou_threshold: 0.85        # theo .clinerules: IoU > 0.85 là trùng lặp
+      same_label_only: true      # chỉ so trong cùng label
+      shape_types: [rectangle, polygon, ellipse, cuboid]
+
+  must_be_inside:
+    enabled: true
+    severity: warning
+    params:
+      pairs:
+        - inner_labels: [license_plate]
+          outer_labels: [vehicle, truck, bus, motorcycle, bicycle]
+          min_ratio: 0.9
+
+  # --- Nhóm đầy đủ (mục 3 của .clinerules) ----------------------------------
+  missing_label:
+    enabled: false               # bật khi mỗi frame bắt buộc phải có nhãn nào đó
+    severity: error
+    params:
+      labels: [vehicle]
+      scope: frame               # frame | task
+      min_count: 1
+      frame_step: 1
+
+  required_attributes:
+    enabled: true
+    severity: error
+    params:
+      labels:
+        vehicle: [vehicle_type, color]
+        license_plate: [plate_number]
+      default_attributes: []     # áp cho mọi label không khai báo riêng
+      empty_counts_as_missing: true
+      check_shapes: true
+      check_tags: true
+
+  unexpected_label:
+    enabled: true
+    severity: warning
+    params:
+      allowed_labels:
+        - vehicle
+        - truck
+        - bus
+        - motorcycle
+        - bicycle
+        - pedestrian
+        - license_plate
+        - traffic_light
+        - traffic_sign
+
+  empty_frame:
+    enabled: false               # khá ồn với video dài, chỉ bật khi cần kiểm tra độ phủ
+    severity: warning
+    params:
+      frame_step: 30             # kiểm tra mỗi 30 frame
+      min_annotations: 1
+      ignore_labels: []
+
+  empty_frame_range:
+    enabled: false               # có trong rules/level1_v1.yaml (Level 1)
+    severity: warning
+    params:
+      min_run_frames: 3          # chỉ báo khi >= 3 frame trống liền nhau
+
+  object_count:
+    enabled: false               # có trong rules/level1_v1.yaml (Level 1)
+    severity: warning
+    params:
+      min_objects: null          # null = không kiểm tra cận dưới
+      max_objects: 40            # ví dụ: quá 40 object/frame là bất thường
+      outlier_ratio: null        # ví dụ 3.0 = báo khi > 3x trung vị của task
+      min_frames_for_outlier: 5
+      frame_step: 1
+      ignore_labels: []
+
+  # --- Nhóm theo thời gian (track) ------------------------------------------
+  track_gap:
+    enabled: true
+    severity: warning
+    params:
+      max_gap_frames: 2          # 2 keyframe liên tiếp không được cách nhau > 3 frame
+      min_area_px: 4
+
+  track_class_change:
+    enabled: true
+    severity: error
+    params:
+      min_iou: 0.5               # track khác nhãn chồng lên nhau >= IoU này
+      max_frame_distance: 1      # và bắt đầu ngay sau khi track trước kết thúc

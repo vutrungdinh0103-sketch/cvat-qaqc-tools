@@ -1,0 +1,127 @@
+# ---------------------------------------------------------------------------
+# Cấu hình rule cho "Level 1 - Overall / Completeness Check"
+# (proposal mục 4: kiểm tra nhanh toàn job trước khi soi từng annotation)
+#
+# Cách dùng:
+#   python -m qaqc validate rules/level1_v1.yaml
+#   python -m qaqc run 42 --rules rules/level1_v1.yaml -o reports/task_42_level1.json
+#   python -m qaqc publish 42 --rules rules/level1_v1.yaml --publish-severity warning
+#   python -m qaqc serve --rules rules/level1_v1.yaml
+#
+# Hoặc không cần file này, dùng trực tiếp cờ --level 1 (tương đương):
+#   python -m qaqc run 42 --level 1
+#
+# Bảng đối chiếu 8 mục của Level 1 với rule (xem thêm `python -m qaqc rules --level 1`):
+#   1. Empty frame            -> empty_frame
+#   2. Missing annotation     -> object_count (min_objects) + empty_frame
+#   3. Missing required label -> missing_label
+#   4. Unexpected label       -> unexpected_label
+#   5. Missing attribute      -> required_attributes
+#   6. Suspicious object count-> object_count (max_objects / outlier_ratio)
+#   7. Unlabeled frame range  -> empty_frame_range
+#   8. Duplicate annotation   -> duplicate_bbox
+#
+# Các rule Level 2 (invalid_size, out_of_frame, tiny_box, must_be_inside,
+# track_gap, track_class_change) được khai báo `enabled: false` ở cuối file để
+# thấy rõ đây là bộ rule Level 1 (bật lại bằng --level 2 hoặc file driving_v1.yaml).
+# ---------------------------------------------------------------------------
+version: 1
+name: level1_overall
+description: >-
+  Level 1 - Overall / Completeness Check: empty frame, missing annotation,
+  missing required label, unexpected label, missing attribute, suspicious
+  object count, unlabeled frame range, duplicate annotation.
+
+defaults:
+  enabled: true
+
+rules:
+  # 1. Empty frame -----------------------------------------------------------
+  empty_frame:
+    enabled: true
+    severity: warning
+    params:
+      frame_step: 1              # Level 1: quét mọi frame để phát hiện thiếu annotation
+      min_annotations: 1
+      ignore_labels: []
+
+  # 7. Unlabeled frame range (>= 3 frame trống liền nhau) --------------------
+  empty_frame_range:
+    enabled: true
+    severity: warning
+    params:
+      min_run_frames: 3          # 2 frame trống liền nhau có thể là bình thường
+
+  # 2 + 6. Missing annotation & suspicious object count ----------------------
+  object_count:
+    enabled: true
+    severity: warning
+    params:
+      min_objects: 1             # "Missing annotation": frame phải có >= 1 object
+      max_objects: 8             # quá 8 object/frame là bất thường (nghi dán nhầm)
+      outlier_ratio: 3.0         # hoặc > 3x trung vị của task (cần >= 5 frame có object)
+      min_frames_for_outlier: 5
+      frame_step: 1
+      ignore_labels: []
+
+  # 3. Missing required label -----------------------------------------------
+  missing_label:
+    enabled: true
+    severity: error
+    params:
+      labels: [vehicle]          # mỗi frame phải có ít nhất 1 vehicle
+      scope: frame               # frame | task
+      min_count: 1
+      frame_step: 1
+
+  # 5. Missing attribute ----------------------------------------------------
+  required_attributes:
+    enabled: true
+    severity: error
+    params:
+      labels:
+        vehicle: [vehicle_type, color]
+        license_plate: [plate_number]
+      default_attributes: []
+      empty_counts_as_missing: true
+      check_shapes: true
+      check_tags: true
+
+  # 4. Unexpected label -----------------------------------------------------
+  unexpected_label:
+    enabled: true
+    severity: warning
+    params:
+      allowed_labels:
+        - vehicle
+        - truck
+        - bus
+        - motorcycle
+        - bicycle
+        - pedestrian
+        - license_plate
+        - traffic_light
+        - traffic_sign
+
+  # 8. Duplicate annotation -------------------------------------------------
+  duplicate_bbox:
+    enabled: true
+    severity: error
+    params:
+      iou_threshold: 0.85        # theo .clinerules: IoU > 0.85 là trùng lặp
+      same_label_only: true
+      shape_types: [rectangle, polygon, ellipse, cuboid]
+
+  # --- Level 2 - Detailed Annotation Validation (tắt trong bộ rule này) -----
+  invalid_size:
+    enabled: false
+  out_of_frame:
+    enabled: false
+  tiny_box:
+    enabled: false
+  must_be_inside:
+    enabled: false
+  track_gap:
+    enabled: false
+  track_class_change:
+    enabled: false

@@ -1,0 +1,42 @@
+# ---------------------------------------------------------------------------
+# Overlay docker compose để build CVAT UI kèm plugin QA/QC.
+#
+# Cách dùng (trong checkout CVAT v2.76.0, đã copy thư mục cvat-ui/plugins/qaqc):
+#   docker compose -f docker-compose.yml -f docker-compose.qaqc.yml build cvat_ui
+#   docker compose -f docker-compose.yml -f docker-compose.qaqc.yml up -d
+#
+# Lưu ý: CVAT build plugin ở BUILD-TIME qua biến CLIENT_PLUGINS (webpack.config.js),
+# nên đổi plugin bắt buộc phải build lại image cvat_ui.
+# ---------------------------------------------------------------------------
+services:
+  cvat_ui:
+    build:
+      context: .
+      dockerfile: Dockerfile.ui
+      args:
+        # `sam` là plugin mặc định của CVAT; webpack tự thêm nó vào danh sách.
+        # Giá trị là ĐƯỜNG DẪN tương đối từ `cvat-ui/` (KHÔNG phải tên trần):
+        # webpack kiểm tra `<path>/src/ts/index.tsx` và bỏ qua nếu không thấy.
+        # Thêm plugin qaqc -> tab "QA/QC" trong trang Quality control.
+        CLIENT_PLUGINS: plugins/qaqc
+        # Nếu cần nhiều plugin: CLIENT_PLUGINS: plugins/qaqc:plugins/my-other-plugin
+    environment:
+      # LƯU Ý: plugin xác định địa chỉ QA service NGAY TRÊN BROWSER (không đọc env
+      # của container, vì webpack của CVAT không define `process.env` - xem V27):
+      #   1. localStorage['qaqc.serviceUrl']
+      #   2. mặc định http://127.0.0.1:8081 khi UI mở ở localhost
+      #   3. mặc định '/qaqc' (cần proxy nginx, xem docs/plugin-install.md)
+      # Biến dưới đây chỉ để tham chiếu cho cấu hình proxy.
+      QAQC_SERVICE_URL: ${QAQC_SERVICE_URL:-http://127.0.0.1:8081}
+
+# ---------------------------------------------------------------------------
+# QA service đã có sẵn trong repo: `python -m qaqc serve` (qaqc/service.py, dùng
+# http.server của stdlib - không cần FastAPI). Cách dễ nhất là chạy nó trên máy
+# host tại http://127.0.0.1:8081 rồi cho plugin trỏ tới (xem docs/localhost.md).
+#
+# Nếu muốn chạy service trong compose, bổ sung ở đây một service `qaqc_service`
+# (build từ Dockerfile riêng có requirements.txt, mount ./rules và ./reports, biến
+# CVAT_HOST/CVAT_TOKEN/CVAT_USER/CVAT_PASS) rồi thêm 3 dòng proxy /qaqc/ vào
+# cvat-ui/react_nginx.conf. Chi tiết: docs/plugin-install.md + docs/localhost.md
+# ---------------------------------------------------------------------------
+
