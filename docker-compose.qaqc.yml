@@ -1,0 +1,32 @@
+# ---------------------------------------------------------------------------
+# Overlay docker compose để build CVAT UI kèm plugin QA/QC.
+#
+# Cách dùng (trong checkout CVAT v2.76.0, đã copy thư mục cvat-ui/plugins/qaqc):
+#   docker compose -f docker-compose.yml -f docker-compose.qaqc.yml build cvat_ui
+#   docker compose -f docker-compose.yml -f docker-compose.qaqc.yml up -d
+#
+# Lưu ý: CVAT build plugin ở BUILD-TIME qua biến CLIENT_PLUGINS (webpack.config.js),
+# nên đổi plugin bắt buộc phải build lại image cvat_ui.
+# ---------------------------------------------------------------------------
+services:
+  cvat_ui:
+    build:
+      context: .
+      dockerfile: Dockerfile.ui
+      args:
+        # `sam` là plugin mặc định của CVAT; webpack tự thêm nó vào danh sách.
+        # Thêm plugin qaqc (phân tách bằng dấu ':') -> tab "QA/QC" trong trang Quality control.
+        CLIENT_PLUGINS: qaqc
+        # Nếu cần nhiều plugin: CLIENT_PLUGINS: qaqc:my-other-plugin
+    environment:
+      # URL của QA service (Phase 3). Mặc định plugin gọi '/qaqc' (qua nginx proxy).
+      QAQC_SERVICE_URL: ${QAQC_SERVICE_URL:-/qaqc}
+
+# ---------------------------------------------------------------------------
+# Phase 3 (chưa có trong repo): service HTTP FastAPI bọc quanh `qaqc/` để plugin UI
+# gọi thay vì CLI. Khi thêm service, bổ sung ở đây một service `qaqc_service`
+# (build từ Dockerfile riêng, mount ./rules và ./reports, biến CVAT_HOST/CVAT_TOKEN
+# + QAQC_RULES) và thêm 3 dòng proxy /qaqc/ vào cvat-ui/react_nginx.conf.
+# Chi tiết: docs/plugin-install.md
+# ---------------------------------------------------------------------------
+

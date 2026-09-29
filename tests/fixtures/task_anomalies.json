@@ -1,0 +1,351 @@
+{
+  "task": {"id": 42, "name": "driving-test", "size": 10, "dimension": "2d"},
+  "frames": [
+    {"name": "frame_000000.png", "width": 100, "height": 50},
+    {"name": "frame_000001.png", "width": 100, "height": 50},
+    {"name": "frame_000002.png", "width": 100, "height": 50},
+    {"name": "frame_000003.png", "width": 100, "height": 50},
+    {"name": "frame_000004.png", "width": 100, "height": 50},
+    {"name": "frame_000005.png", "width": 100, "height": 50},
+    {"name": "frame_000006.png", "width": 100, "height": 50},
+    {"name": "frame_000007.png", "width": 100, "height": 50},
+    {"name": "frame_000008.png", "width": 100, "height": 50},
+    {"name": "frame_000009.png", "width": 100, "height": 50}
+  ],
+  "jobs": [
+    {"id": 7, "start_frame": 0, "stop_frame": 4, "stage": "annotation", "state": "new"},
+    {"id": 8, "start_frame": 5, "stop_frame": 9, "stage": "acceptance", "state": "completed"}
+  ],
+  "labels": [
+    {
+      "id": 1,
+      "name": "vehicle",
+      "type": "any",
+      "attributes": [
+        {
+          "id": 11,
+          "name": "vehicle_type",
+          "mutable": true,
+          "input_type": "select",
+          "default_value": "car",
+          "values": ["car", "truck", "bus"]
+        },
+        {
+          "id": 12,
+          "name": "color",
+          "mutable": true,
+          "input_type": "select",
+          "default_value": "white",
+          "values": ["white", "black", "red"]
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "name": "license_plate",
+      "type": "any",
+      "attributes": [
+        {
+          "id": 21,
+          "name": "plate_number",
+          "mutable": true,
+          "input_type": "text",
+          "default_value": "",
+          "values": []
+        }
+      ]
+    },
+    {"id": 3, "name": "pedestrian", "type": "any", "attributes": []},
+    {"id": 4, "name": "trailer", "type": "any", "attributes": []}
+  ],
+  "annotations": {
+    "version": 0,
+    "tags": [{"frame": 5, "label_id": 3, "source": "manual", "attributes": []}],
+    "shapes": [
+      {
+        "id": 1,
+        "type": "rectangle",
+        "frame": 0,
+        "label_id": 1,
+        "points": [10.0, 5.0, 50.0, 45.0],
+        "occluded": false,
+        "outside": false,
+        "z_order": 0,
+        "source": "manual",
+        "attributes": [
+          {"spec_id": "vehicle_type", "value": "car"},
+          {"spec_id": "color", "value": "white"}
+        ]
+      },
+      {
+        "id": 2,
+        "type": "rectangle",
+        "frame": 0,
+        "label_id": 1,
+        "points": [11.0, 6.0, 51.0, 46.0],
+        "occluded": false,
+        "outside": false,
+        "z_order": 1,
+        "source": "manual",
+        "attributes": [
+          {"spec_id": "vehicle_type", "value": "car"},
+          {"spec_id": "color", "value": "white"}
+        ]
+      },
+      {
+        "id": 3,
+        "type": "rectangle",
+        "frame": 1,
+        "label_id": 1,
+        "points": [60.0, 10.0, 60.0, 40.0],
+        "occluded": false,
+        "outside": false,
+        "z_order": 0,
+        "source": "manual",
+        "attributes": [
+          {"spec_id": "vehicle_type", "value": "truck"},
+          {"spec_id": "color", "value": "black"}
+        ]
+      },
+      {
+        "id": 4,
+        "type": "rectangle",
+        "frame": 2,
+        "label_id": 1,
+        "points": [95.0, 10.0, 120.0, 40.0],
+        "occluded": false,
+        "outside": false,
+        "z_order": 0,
+        "source": "manual",
+        "attributes": [
+          {"spec_id": "vehicle_type", "value": "car"},
+          {"spec_id": "color", "value": "red"}
+        ]
+      },
+      {
+        "id": 5,
+        "type": "rectangle",
+        "frame": 2,
+        "label_id": 1,
+        "points": [10.0, 10.0, 12.0, 12.0],
+        "occluded": false,
+        "outside": false,
+        "z_order": 1,
+        "source": "manual",
+        "attributes": [
+          {"spec_id": "vehicle_type", "value": "car"},
+          {"spec_id": "color", "value": "white"}
+        ]
+      },
+      {
+        "id": 6,
+        "type": "rectangle",
+        "frame": 3,
+        "label_id": 2,
+        "points": [80.0, 15.0, 95.0, 30.0],
+        "occluded": false,
+        "outside": false,
+        "z_order": 0,
+        "source": "manual",
+        "attributes": [{"spec_id": "plate_number", "value": "51A-12345"}]
+      },
+      {
+        "id": 7,
+        "type": "rectangle",
+        "frame": 3,
+        "label_id": 1,
+        "points": [60.0, 5.0, 85.0, 25.0],
+        "occluded": false,
+        "outside": false,
+        "z_order": 1,
+        "source": "manual",
+        "attributes": [
+          {"spec_id": "vehicle_type", "value": "car"},
+          {"spec_id": "color", "value": "white"}
+        ]
+      },
+      {
+        "id": 8,
+        "type": "rectangle",
+        "frame": 4,
+        "label_id": 1,
+        "points": [5.0, 5.0, 25.0, 25.0],
+        "occluded": false,
+        "outside": false,
+        "z_order": 0,
+        "source": "manual",
+        "attributes": [{"spec_id": "color", "value": "white"}]
+      },
+      {
+        "id": 9,
+        "type": "rectangle",
+        "frame": 4,
+        "label_id": 1,
+        "points": [30.0, 5.0, 60.0, 25.0],
+        "occluded": false,
+        "outside": false,
+        "z_order": 1,
+        "source": "manual",
+        "attributes": [
+          {"spec_id": "vehicle_type", "value": ""},
+          {"spec_id": "color", "value": "black"}
+        ]
+      },
+      {
+        "id": 10,
+        "type": "rectangle",
+        "frame": 4,
+        "label_id": 4,
+        "points": [70.0, 30.0, 90.0, 45.0],
+        "occluded": false,
+        "outside": false,
+        "z_order": 2,
+        "source": "manual",
+        "attributes": []
+      },
+      {
+        "id": 11,
+        "type": "polyline",
+        "frame": 0,
+        "label_id": 1,
+        "points": [1.0, 1.0, 99.0, 49.0],
+        "occluded": false,
+        "outside": false,
+        "z_order": 3,
+        "source": "manual",
+        "attributes": []
+      },
+      {
+        "id": 12,
+        "type": "skeleton",
+        "frame": 1,
+        "label_id": 3,
+        "points": [],
+        "occluded": false,
+        "outside": false,
+        "z_order": 4,
+        "source": "manual",
+        "attributes": [],
+        "elements": []
+      },
+      {
+        "id": 13,
+        "type": "mask",
+        "frame": 2,
+        "label_id": 1,
+        "points": [5, 5, 3, 3],
+        "occluded": false,
+        "outside": false,
+        "z_order": 5,
+        "source": "manual",
+        "attributes": []
+      },
+      {
+        "id": 14,
+        "type": "rectangle",
+        "frame": 6,
+        "label_id": 1,
+        "points": [40.0, 10.0, 70.0, 40.0],
+        "occluded": false,
+        "outside": true,
+        "z_order": 0,
+        "source": "manual",
+        "attributes": []
+      }
+    ],
+    "tracks": [
+      {
+        "id": 100,
+        "label_id": 1,
+        "frame": 0,
+        "group": 0,
+        "source": "manual",
+        "attributes": [
+          {"spec_id": "vehicle_type", "value": "car"},
+          {"spec_id": "color", "value": "white"}
+        ],
+        "shapes": [
+          {
+            "type": "rectangle",
+            "frame": 0,
+            "points": [10.0, 5.0, 20.0, 15.0],
+            "occluded": false,
+            "outside": false,
+            "z_order": 0,
+            "attributes": []
+          },
+          {
+            "type": "rectangle",
+            "frame": 1,
+            "points": [11.0, 5.0, 21.0, 15.0],
+            "occluded": false,
+            "outside": false,
+            "z_order": 0,
+            "attributes": []
+          },
+          {
+            "type": "rectangle",
+            "frame": 6,
+            "points": [12.0, 5.0, 22.0, 15.0],
+            "occluded": false,
+            "outside": false,
+            "z_order": 0,
+            "attributes": []
+          }
+        ]
+      },
+      {
+        "id": 200,
+        "label_id": 3,
+        "frame": 3,
+        "group": 0,
+        "source": "manual",
+        "attributes": [],
+        "shapes": [
+          {
+            "type": "rectangle",
+            "frame": 3,
+            "points": [30.0, 30.0, 50.0, 45.0],
+            "occluded": false,
+            "outside": false,
+            "z_order": 0,
+            "attributes": []
+          },
+          {
+            "type": "rectangle",
+            "frame": 4,
+            "points": [30.0, 30.0, 50.0, 45.0],
+            "occluded": false,
+            "outside": false,
+            "z_order": 0,
+            "attributes": []
+          }
+        ]
+      },
+      {
+        "id": 201,
+        "label_id": 1,
+        "frame": 5,
+        "group": 0,
+        "source": "manual",
+        "attributes": [
+          {"spec_id": "vehicle_type", "value": "car"},
+          {"spec_id": "color", "value": "white"}
+        ],
+        "shapes": [
+          {
+            "type": "rectangle",
+            "frame": 5,
+            "points": [30.0, 30.0, 50.0, 45.0],
+            "occluded": false,
+            "outside": false,
+            "z_order": 0,
+            "attributes": []
+          }
+        ]
+      }
+    ]
+  }
+}
+
+

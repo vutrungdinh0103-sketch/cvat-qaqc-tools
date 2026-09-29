@@ -1,0 +1,12 @@
+# CVAT QA/QC Tool Rules
+
+## Yêu cầu kỹ thuật
+- Ngôn ngữ: Python 3.10+
+- Thư viện chính: cvat-sdk, shapely, numpy, pydantic, python-dotenv
+- Luôn sử dụng SDK chính thức: `cvat_sdk.Client(url=..., credentials=...)` (không dùng cvat-rest-api cũ).
+
+## Logic QA/QC cần thực hiện
+1. Kiểm tra box/polygon tràn khung ảnh hoặc có kích thước w <= 0, h <= 0.
+2. Kiểm tra trùng lặp (Bounding Box duplicate) dựa trên IoU (> 0.85).
+3. Kiểm tra thiếu nhãn (Missing labels/attributes) theo danh sách quy định.
+4. Xuất báo cáo kết quả kiểm tra ra định dạng JSON hoặc CSV.

@@ -1,0 +1,25 @@
+# CVAT QA/QC tools - Python 3.10+
+# Cài đặt: python -m pip install -r requirements.txt
+# (deps phục vụ phát triển/test: python -m pip install -r requirements-dev.txt)
+
+# SDK chính thức của CVAT (dùng cho Client / tasks / jobs / issues)
+cvat-sdk>=2.75,<3
+
+# Hình học: tính IoU, giao/hợp/chứa nhau của box & polygon
+shapely>=2.0,<3
+
+# Vector hoá thao tác toạ độ (points của CVAT)
+numpy>=1.26,<3
+
+# Model dữ liệu (cấu hình, rule params, issue, report) + validate
+pydantic>=2.5,<3
+
+# Đọc cấu hình kết nối từ file .env
+python-dotenv>=1.0,<2
+
+# File cấu hình rule (rules/*.yaml)
+PyYAML>=6.0,<7
+
+# Bắt lỗi mạng khi kết nối CVAT (thường đã có sẵn theo cvat-sdk, khai báo tường minh)
+urllib3>=2.0,<3
+

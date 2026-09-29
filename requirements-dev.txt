@@ -1,0 +1,6 @@
+# Deps phát triển/test (cài: python -m pip install -r requirements.txt -r requirements-dev.txt)
+# Lưu ý: pytest/ruff không cần cho việc chạy tool trong production.
+
+pytest>=8.0,<9
+
+ruff>=0.6

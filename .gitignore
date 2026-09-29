@@ -1,0 +1,19 @@
+# Cấu hình cục bộ (chứa mật khẩu thật) - chỉ commit .env.example
+.env
+
+# Môi trường ảo
+.venv/
+venv/
+env/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Kết quả kiểm tra QA/QC
+reports/
+*.log
