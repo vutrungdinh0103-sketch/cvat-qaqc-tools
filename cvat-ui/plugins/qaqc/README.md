@@ -17,7 +17,10 @@ Chi tiết cài đặt & build: [`docs/plugin-install.md`](../../../docs/plugin-
 
 1. Webpack nạp file entry khi build với `CLIENT_PLUGINS=qaqc`; `sam` luôn được thêm mặc định.
 2. Sau sự kiện `plugins.ready`, plugin gọi `window.cvatUI.registerComponent(builder)`.
-3. `builder` dùng `actionCreators.addUIComponent('qualityControlPage.tabs.items', component, { weight })`.
+3. `builder` dùng `dispatch(actionCreators.addUIComponent('qualityControlPage.tabs.items', component, { weight }))`.
+   ⚠️ **Phải `dispatch`**: chỉ gọi action creator thì action bị bỏ đi, store không đổi và
+   tab không hiện (lỗi này **im lặng**, không có cảnh báo trong console) - xem V31 trong
+   [`docs/verified-behaviors.md`](../../../docs/verified-behaviors.md).
 4. CVAT **gọi hàm** tab với props `{ key, targetProps }` và cần nhận về
    `{ key, label, children }` (hoặc `null`); `targetProps.instance` là task/project đang mở.
 
@@ -27,7 +30,18 @@ Muốn giữ lại, dùng `actionCreators.updateUIComponent('qualityControlPage.
 
 ## Trạng thái
 
-- Skeleton đã viết theo đúng API của CVAT v2.76, **chưa compile trong workspace này**
-  (không có checkout `cvat-ui` + `node_modules`).
-- QA service HTTP là Phase 3 - chưa có trong repo; khi chưa có service, tab sẽ hiển thị
-  lỗi kết nối kèm gợi ý kiểm tra `QAQC_SERVICE_URL`.
+- Skeleton viết theo đúng API mà **CVAT v2.74.1** cung cấp (đã kiểm chứng bằng source
+  tại `C:\cvat-day2`: `plugins-entrypoint.tsx`, `plugins-actions.ts`,
+  `quality-control-page.tsx`) - xem V25 trong
+  [`docs/verified-behaviors.md`](../../../docs/verified-behaviors.md).
+- Plugin vẫn **chưa được compile trong workspace repo này** (không có `node_modules`):
+  cần build image `cvat_ui` theo [`docs/plugin-install.md`](../../../docs/plugin-install.md).
+- Tab có bộ lọc **Level 1 / Level 2 / tất cả** và cột `Cấp độ` (dữ liệu `level` +
+  `counts_by_level` do QA service trả về).
+- Tab chỉ render cho **task** (trả `null` cho project/job: QA service chỉ có endpoint
+  theo task id). Bộ lọc cấp độ và bảng lỗi nằm trong `qaqc-tab.tsx`.
+- QA service HTTP **đã có sẵn trong repo**: `python -m qaqc serve` (mặc định
+  `http://127.0.0.1:8081`) - có web UI để xem kết quả và đúng các endpoint mà plugin
+  gọi. Khi chưa chạy service, tab hiển thị lỗi kết nối kèm gợi ý kiểm tra
+  `QAQC_SERVICE_URL`. Hướng dẫn + xử lý sự cố:
+  [`docs/localhost.md`](../../../docs/localhost.md).

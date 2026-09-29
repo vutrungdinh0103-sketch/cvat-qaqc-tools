@@ -64,6 +64,8 @@ export function QAQCTab(props: QAQCTabProps): JSX.Element {
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const [severityFilter, setSeverityFilter] = useState<string>('all');
+    // 'all' = mọi cấp độ, '1' = Level 1 (Overall/Completeness), '2' = Level 2 (Detailed)
+    const [levelFilter, setLevelFilter] = useState<string>('1');
 
     const load = useCallback(async (refresh: boolean): Promise<void> => {
         if (typeof taskId !== 'number') {
@@ -72,7 +74,10 @@ export function QAQCTab(props: QAQCTabProps): JSX.Element {
         setLoading(true);
         setError(null);
         try {
-            const result = refresh ? await runTaskQAQC(taskId) : await fetchTaskReport(taskId);
+            const options = levelFilter === 'all' ? {} : { level: Number(levelFilter) };
+            const result = refresh
+                ? await runTaskQAQC(taskId, options)
+                : await fetchTaskReport(taskId, options);
             setReport(result);
         } catch (requestError: unknown) {
             setReport(null);
@@ -80,7 +85,7 @@ export function QAQCTab(props: QAQCTabProps): JSX.Element {
         } finally {
             setLoading(false);
         }
-    }, [taskId]);
+    }, [taskId, levelFilter]);
 
     useEffect(() => {
         void load(false);
@@ -122,6 +127,15 @@ export function QAQCTab(props: QAQCTabProps): JSX.Element {
                     Tải lại kết quả
                 </button>
                 <select
+                    value={levelFilter}
+                    onChange={(event) => setLevelFilter(event.target.value)}
+                    style={{ padding: '4px 8px' }}
+                >
+                    <option value="1">Level 1 – Overall/Completeness</option>
+                    <option value="2">Level 2 – Chi tiết</option>
+                    <option value="all">Tất cả cấp độ</option>
+                </select>
+                <select
                     value={severityFilter}
                     onChange={(event) => setSeverityFilter(event.target.value)}
                     style={{ padding: '4px 8px' }}
@@ -159,12 +173,22 @@ export function QAQCTab(props: QAQCTabProps): JSX.Element {
                         {' frame có annotation (đã quét '}
                         {report.objects_scanned}
                         {' object)'}
+                        {!!report.counts_by_level && (
+                            <span style={styles.meta}>
+                                {' — Level 1: '}
+                                {report.counts_by_level['1'] ?? 0}
+                                {', Level 2: '}
+                                {report.counts_by_level['2'] ?? 0}
+                                {` (bộ rule: ${report.rules_name})`}
+                            </span>
+                        )}
                     </div>
 
                     <table style={styles.table}>
                         <thead>
                             <tr>
                                 <th style={styles.th}>Mức độ</th>
+                                <th style={styles.th}>Cấp độ</th>
                                 <th style={styles.th}>Rule</th>
                                 <th style={styles.th}>Frame</th>
                                 <th style={styles.th}>Nhãn</th>
@@ -177,6 +201,7 @@ export function QAQCTab(props: QAQCTabProps): JSX.Element {
                                     <td style={{ ...styles.td, color: SEVERITY_COLORS[issue.severity] }}>
                                         {issue.severity}
                                     </td>
+                                    <td style={styles.td}>{`L${issue.level}`}</td>
                                     <td style={styles.td}>{issue.rule_id}</td>
                                     <td style={styles.td}>{issue.frame}</td>
                                     <td style={styles.td}>{issue.label ?? '-'}</td>
@@ -185,8 +210,8 @@ export function QAQCTab(props: QAQCTabProps): JSX.Element {
                             ))}
                             {!issues.length && (
                                 <tr>
-                                    <td style={styles.td} colSpan={5}>
-                                        Không có lỗi nào ở mức độ đang lọc.
+                                    <td style={styles.td} colSpan={6}>
+                                        Không có lỗi nào ở cấp độ / mức độ đang lọc.
                                     </td>
                                 </tr>
                             )}

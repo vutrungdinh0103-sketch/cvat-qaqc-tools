@@ -4,9 +4,10 @@
 
 ```
 ┌──────────────────────────── Lớp 3: Giao diện ─────────────────────────────┐
-│ qaqc/cli.py (python -m qaqc run|publish|rules|validate)                   │
+│ qaqc/cli.py (python -m qaqc run|publish|rules|validate|serve)             │
 │ qaqc/legacy.py + checker.py (CLI cũ, giữ nguyên schema/exit code)          │
 │ cvat-ui/plugins/qaqc (tab QA/QC trong CVAT UI - gọi service HTTP)          │
+│ qaqc/service.py + qaqc/webui.py (service HTTP localhost: web UI + API)     │
 └───────────────▲───────────────────────────────────────────▲───────────────┘
                 │ QAReport (pydantic)                       │ JSON HTTP
 ┌───────────────┴──────────── Lớp 2: Cầu nối CVAT ──────────┴───────────────┐
@@ -17,7 +18,8 @@
 ┌───────────────┴───────────────── Lớp 1: Engine ───────────────────────────┐
 │ qaqc/model.py     : NormShape / NormTrack / NormTag / TaskData (track-aware)│
 │ qaqc/geometry.py  : IoU, bbox, containment, polygon tự cắt                 │
-│ qaqc/rules/       : RuleContext + 11 rule (geometry/completeness/temporal) │
+│ qaqc/rules/       : RuleContext + 13 rule (geometry/completeness/temporal) │
+│                     Level 1 = 7 rule (Overall/Completeness), Level 2 = 6     │
 │ qaqc/engine.py    : chạy rule -> Finding -> Issue (fingerprint, job_id)    │
 │ qaqc/report.py    : QAReport + writer JSON/CSV/JUnit                       │
 │ qaqc/config.py    : CVATConfig (env) + RuleConfig (YAML, pydantic)         │
@@ -25,9 +27,9 @@
 ```
 
 **Lợi ích của việc tách lớp 1:** toàn bộ logic QA/QC test được **offline** bằng
-`TaskData` dựng tay hoặc fixture JSON (183 test chạy trong ~2 giây, không cần CVAT
+`TaskData` dựng tay hoặc fixture JSON (232 test chạy trong ~7 giây, không cần CVAT
 server). Chỉ 2 module (`data_source.py`, `publishers/cvat_issues.py`) import
-`cvat_sdk`.
+`cvat_sdk` — service HTTP cũng không cần import SDK khi chạy `--demo`/`--source-file`.
 
 ## Luồng dữ liệu
 
@@ -58,6 +60,33 @@ trong `message` (dạng `[QA][sev=error][fp=1a2b3c4d][v=1] ...`). Khi chạy l�
 Fingerprint dùng `rule_hash` **của riêng rule** (không phải hash cả bộ cấu hình) để
 việc bật/tắt rule khác không làm "reset" toàn bộ issue đã tạo.
 
+## Service HTTP localhost (`qaqc/service.py` + `qaqc/webui.py`)
+
+`python -m qaqc serve` biến engine thành một service HTTP nhỏ **dùng `http.server`
+của thư viện chuẩn** (không thêm dependency, không cần uvicorn/Docker), phục vụ 2
+mục đích: (1) trang web để con người xem kết quả ngay trên máy, (2) API đúng như
+plugin CVAT UI cần.
+
+| Thành phần | Vai trò |
+| --- | --- |
+| `QAQCService` | Nguồn dữ liệu (demo → file JSON → CVAT), cấu hình rule hiệu lực, cache báo cáo, map lỗi → mã HTTP |
+| `QAQCServer` / `QAQCHandler` | `ThreadingHTTPServer` + routing/JSON/CSV/CORS/`OPTIONS` |
+| `qaqc/webui.py` | Trang HTML (nhúng trong module, không CDN) gọi chính các endpoint trên |
+| `qaqc/demo.py` | `TaskData` mẫu kích hoạt cả 9 rule đang bật → `serve --demo` luôn có kết quả để xem |
+| `load_task_data_from_file()` | Đọc payload CVAT từ file JSON để chạy offline (test/demo) |
+
+Điểm cần nhớ khi bảo trì:
+
+- Endpoint phải **trùng** với `cvat-ui/plugins/qaqc/src/ts/service-client.ts`
+  (`/health`, `/tasks/{id}/report`, `/tasks/{id}/report.csv`, `/tasks/{id}/run`);
+  đổi API ở đây thì phải đổi cả plugin.
+- CORS (`Access-Control-Allow-Origin: *`) là **bắt buộc** để UI CVAT (origin khác)
+  gọi được; mặc định bind `127.0.0.1` nên vẫn chỉ dùng nội bộ máy.
+- Cache theo `(task_id, RuleConfig.config_hash)` → đổi tham số rule sẽ tự tính lại;
+  `POST /run` và `?refresh=true` luôn bỏ cache.
+- `--demo`/`--source-file` giúp test end-to-end mà không cần CVAT (đây cũng là cách
+  `tests/test_service.py` chạy 23 test offline).
+
 ## Quyết định thiết kế đáng chú ý
 
 | Quyết định | Lý do |
@@ -73,8 +102,22 @@ việc bật/tắt rule khác không làm "reset" toàn bộ issue đã tạo.
 
 ## Lộ trình
 
-- **Đã xong (v0.2.0):** engine + 11 rule + cấu hình YAML + publisher issue + CLI mới
+- **Đã xong (v0.2.0):** engine + 13 rule + cấu hình YAML + publisher issue + CLI mới
   + lớp tương thích CLI cũ + 183 test + tài liệu + skeleton plugin UI.
-- **Tiếp theo (tuỳ chọn):** QA service HTTP (FastAPI + hàng đợi job) để plugin UI
-  gọi thay vì CLI; đồng bộ fingerprint vào Redis/SQLite để tránh đọc lại issue;
-  rule mới theo yêu cầu dự án (`cannot_overlap`, `require_nearby`, kiểm tra 3D).
+- **Đã xong (v0.2.x):** QA service HTTP chạy localhost (`python -m qaqc serve`, web UI
+  + API JSON/CSV + CORS, dữ liệu mẫu để demo, gợi ý sửa khi thiếu `.env`) + 25 test
+  offline → tổng **208 test**.
+- **Đã xong (v0.3.0 - demo Level 1 trên CVAT):** 2 rule mới `empty_frame_range` +
+  `object_count`, metadata **`level`** (1 = Overall/Completeness, 2 = Detailed) cho mọi
+  rule, `--level 1|2` (CLI) + `?level=` (service) + bộ lọc cấp độ trong plugin tab,
+  `rules/level1_v1.yaml`, script `scripts/create_demo_task.py` (tạo task có sẵn đủ 8 lỗi
+  Level 1), sửa 3 bug thật khi chạy với CVAT 2.74.1 (V6: `spec_id` là id; V20: xác thực
+  token; **V31: plugin tab phải `dispatch(actionCreators.addUIComponent(...))`** - thiếu
+  `dispatch` thì tab im lặng không hiện). Tab QA/QC đã hiện và đọc được 15 lỗi của task
+  demo trên CVAT thật (`docs/img/qaqc-tab-live.png`); script kiểm tra lại:
+  `scripts/check_plugin_tab.mjs` (Chrome headless) → tổng **232 test** (offline) + 1
+  kiểm tra UI tùy chọn; kịch bản demo: [`level1-demo.md`](level1-demo.md).
+- **Tiếp theo (tuỳ chọn):** hàng đợi job + nhiều worker cho service (FastAPI/uvicorn
+  nếu cần mở rộng); đồng bộ fingerprint vào Redis/SQLite để tránh đọc lại issue;
+  endpoint publish issue qua HTTP; rule mới theo yêu cầu dự án (`cannot_overlap`,
+  `require_nearby`, kiểm tra 3D).
