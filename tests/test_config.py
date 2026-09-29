@@ -14,6 +14,69 @@ from qaqc.rules import registered_rule_ids
 # ---------------------------------------------------------------------------
 # CVATConfig
 # ---------------------------------------------------------------------------
+class _FakeConfiguration:
+    """``api_client.configuration`` giả (chỉ cần ``api_key``)."""
+
+    def __init__(self) -> None:
+        self.api_key: dict[str, str] = {}
+
+
+class _FakeApiClient:
+    """``api_client`` giả."""
+
+    def __init__(self) -> None:
+        self.configuration = _FakeConfiguration()
+
+
+class _FakeClient:
+    """Client giả để test ``CVATConfig.create_client`` mà không cần CVAT server."""
+
+    def __init__(self, url: str) -> None:
+        self.url = url
+        self.api_client = _FakeApiClient()
+        self.credentials: object = None
+        self.closed = False
+        self.calls: list[object] = []
+
+    def login(self, credentials: object) -> None:
+        self.credentials = credentials
+        self.calls.append(credentials)
+
+    def close(self) -> None:
+        self.closed = True
+
+
+@pytest.fixture
+def fake_client(monkeypatch) -> type[_FakeClient]:
+    """Thay ``cvat_sdk.Client`` bằng client giả và trả về lớp giả đó."""
+    monkeypatch.setattr("cvat_sdk.Client", _FakeClient)
+    return _FakeClient
+
+
+def test_create_client_uses_access_token(fake_client) -> None:
+    """Token được gửi qua ``api_key['tokenAuth']`` -> header ``Authorization: Token ...``."""
+    config = CVATConfig(host="http://cvat.test", token="tok-123")
+    client = config.create_client()
+    assert client.url == "http://cvat.test"
+    assert client.api_client.configuration.api_key["tokenAuth"] == "tok-123"
+    assert client.calls == []  # không gọi API login
+
+
+def test_create_client_uses_password_credentials(fake_client) -> None:
+    """Khi không có token thì đăng nhập bằng ``(user, password)``."""
+    config = CVATConfig(host="http://cvat.test", user="admin", password="secret")
+    client = config.create_client()
+    assert client.credentials == ("admin", "secret")
+    assert client.api_client.configuration.api_key == {}
+
+
+def test_create_client_without_credentials_raises(fake_client) -> None:
+    """Thiếu cả token lẫn user/password -> ValueError (không gọi CVAT)."""
+    config = CVATConfig(host="http://cvat.test")
+    with pytest.raises(ValueError, match="xác thực"):
+        config.create_client()
+
+
 def test_config_from_env_values(monkeypatch) -> None:
     """Đọc đủ host/user/password từ biến môi trường."""
     monkeypatch.setenv("CVAT_HOST", "cvat.example.com/")

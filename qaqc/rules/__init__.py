@@ -46,6 +46,28 @@ def registered_rule_ids() -> list[str]:
     return sorted(_RULE_REGISTRY)
 
 
+def rule_level(rule_id: str) -> int:
+    """Cấp độ QA của một rule (``1`` = Overall/Completeness, ``2`` = Detailed).
+
+    :raises KeyError: nếu rule chưa được đăng ký.
+    """
+    return get_rule_class(rule_id).level
+
+
+def rule_ids_for_level(level: int) -> list[str]:
+    """Danh sách id rule thuộc một cấp độ QA (đã sắp xếp).
+
+    Dùng cho ``--level`` của CLI, tham số ``level`` của service và
+    :func:`rule_catalog`. Ví dụ: ``rule_ids_for_level(1)`` trả về đúng các rule
+    của "Level 1 - Overall / Completeness Check".
+
+    :raises ValueError: nếu ``level`` không phải 1 hoặc 2.
+    """
+    if level not in (1, 2):
+        raise ValueError(f"Cấp độ QA không hợp lệ: {level} (chỉ nhận 1 hoặc 2).")
+    return [rule_id for rule_id in registered_rule_ids() if _RULE_REGISTRY[rule_id].level == level]
+
+
 def get_rule_class(rule_id: str) -> type[Rule]:
     """Lấy lớp rule theo id.
 
@@ -80,6 +102,7 @@ def rule_catalog() -> list[dict[str, Any]]:
             {
                 "rule_id": rule_id,
                 "group": rule_cls.group,
+                "level": rule_cls.level,
                 "description": rule_cls.description,
                 "default_severity": rule_cls.default_severity.value,
                 "params_schema": rule_cls.params_model.model_json_schema(),
@@ -101,6 +124,8 @@ _RULE_CLASSES: tuple[type[Rule], ...] = (
     completeness_rules.RequiredAttributesRule,
     completeness_rules.UnexpectedLabelRule,
     completeness_rules.EmptyFrameRule,
+    completeness_rules.EmptyFrameRangeRule,
+    completeness_rules.ObjectCountRule,
     # temporal
     temporal_rules.TrackGapRule,
     temporal_rules.TrackClassChangeRule,
@@ -120,4 +145,6 @@ __all__ = [
     "register_rule",
     "registered_rule_ids",
     "rule_catalog",
+    "rule_ids_for_level",
+    "rule_level",
 ]

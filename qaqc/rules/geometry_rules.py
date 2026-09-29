@@ -249,6 +249,8 @@ class DuplicateBBoxRule(Rule):
     default_severity: ClassVar[Severity] = Severity.ERROR
     params_model: ClassVar[type[DuplicateParams]] = DuplicateParams
     group: ClassVar[str] = "geometry"
+    #: "Duplicate annotation" nằm trong danh sách Level 1 (Overall/Completeness).
+    level: ClassVar[int] = 1
 
     def check(self, ctx: RuleContext) -> Iterable[Finding]:
         params: DuplicateParams = self.params  # type: ignore[assignment]

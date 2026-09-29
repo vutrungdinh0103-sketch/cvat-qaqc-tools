@@ -86,12 +86,56 @@ def _as_str(value: Any, default: str | None = None) -> str | None:
     return text or default
 
 
-def normalize_attributes(raw: Any) -> dict[str, str]:
+def _attribute_name(
+    item: Any,
+    attribute_names: Mapping[int, str] | None,
+) -> str | None:
+    """Tên attribute từ một ``AttributeVal``.
+
+    API CVAT 2.x trả ``spec_id`` là **id** của attribute (ví dụ ``45``), nên cần
+    ``attribute_names`` (lấy từ schema label) để đổi sang tên. Vẫn chấp nhận dữ liệu
+    đã có sẵn tên trong ``spec_id`` (fixture cũ) hoặc trong ``name``.
+    """
+    raw_key = _get(item, "spec_id")
+    if raw_key is None:
+        raw_key = _get(item, "name")
+    if raw_key is None:
+        return None
+
+    key_id = _as_int(raw_key)
+    if key_id is not None and attribute_names and key_id in attribute_names:
+        return attribute_names[key_id]
+    return _as_str(raw_key)
+
+
+def attribute_name_index(raw_labels: Iterable[Any] | None) -> dict[int, str]:
+    """``{attribute_id: attribute_name}`` từ schema label của task/project.
+
+    Dùng để giải mã ``spec_id`` (id) trong ``annotations`` - xem
+    :func:`normalize_attributes`.
+    """
+    index: dict[int, str] = {}
+    for raw_label in raw_labels or ():
+        for raw_attribute in _get(raw_label, "attributes") or ():
+            attribute_id = _as_int(_get(raw_attribute, "id"))
+            name = _as_str(_get(raw_attribute, "name"))
+            if attribute_id is not None and name:
+                index[attribute_id] = name
+    return index
+
+
+def normalize_attributes(
+    raw: Any,
+    *,
+    attribute_names: Mapping[int, str] | None = None,
+) -> dict[str, str]:
     """Chuẩn hoá ``attributes`` của shape/track/tag thành ``dict[str, str]``.
 
-    Hỗ trợ cả 2 dạng:
+    Hỗ trợ cả 3 dạng:
 
-    - ``[{"spec_id": "vehicle_type", "value": "car"}]`` (API CVAT),
+    - ``[{"spec_id": 45, "value": "car"}]`` - API CVAT 2.x (``spec_id`` là id, cần
+      ``attribute_names`` để đổi sang tên ``vehicle_type``),
+    - ``[{"spec_id": "vehicle_type", "value": "car"}]`` (dữ liệu đã có tên),
     - ``{"vehicle_type": "car"}`` (dữ liệu đã xử lý).
     """
     if not raw:
@@ -105,8 +149,7 @@ def normalize_attributes(raw: Any) -> dict[str, str]:
 
     result: dict[str, str] = {}
     for item in raw:
-        # SDK dùng `spec_id` (thực chất là TÊN attribute), nhưng vẫn chấp nhận `name`.
-        name = _as_str(_get(item, "spec_id")) or _as_str(_get(item, "name"))
+        name = _attribute_name(item, attribute_names)
         if not name:
             continue
         result[name] = _as_str(_get(item, "value"), default="") or ""
@@ -178,6 +221,7 @@ def normalize_shape(
     raw: Any,
     *,
     label_names: Mapping[int, str],
+    attribute_names: Mapping[int, str] | None = None,
     track_id: int | None = None,
     label_id: int | None = None,
     index: int = 0,
@@ -207,7 +251,7 @@ def normalize_shape(
         label_id=resolved_label_id,
         label=label_names.get(resolved_label_id, f"label_id={resolved_label_id}"),
         points=to_points(_get(raw, "points")),
-        attributes=normalize_attributes(_get(raw, "attributes")),
+        attributes=normalize_attributes(_get(raw, "attributes"), attribute_names=attribute_names),
         shape_id=shape_id,
         track_id=track_id,
         group=_as_int(_get(raw, "group")),
@@ -234,6 +278,7 @@ def normalize_shapes(
     raw_shapes: Iterable[Any] | None,
     *,
     label_names: Mapping[int, str],
+    attribute_names: Mapping[int, str] | None = None,
     frame_range: tuple[int, int] | None = None,
 ) -> tuple[list[NormShape], dict[str, int], int]:
     """Chuẩn hoá ``annotations.shapes``.
@@ -250,7 +295,12 @@ def normalize_shapes(
             continue
         total += 1
 
-        shape, reason = normalize_shape(raw, label_names=label_names, index=index)
+        shape, reason = normalize_shape(
+            raw,
+            label_names=label_names,
+            attribute_names=attribute_names,
+            index=index,
+        )
         if shape is None:
             reasons[reason or SKIP_INVALID_POINTS] += 1
             continue
@@ -265,6 +315,7 @@ def normalize_track(
     raw: Any,
     *,
     label_names: Mapping[int, str],
+    attribute_names: Mapping[int, str] | None = None,
     frame_range: tuple[int, int] | None = None,
 ) -> tuple[NormTrack | None, list[NormShape], dict[str, int]]:
     """Chuẩn hoá một track và toàn bộ keyframe của nó.
@@ -288,6 +339,7 @@ def normalize_track(
         shape, reason = normalize_shape(
             raw_keyframe,
             label_names=label_names,
+            attribute_names=attribute_names,
             track_id=track_id,
             label_id=label_id,
             index=index,
@@ -299,7 +351,9 @@ def normalize_track(
 
     # CVAT lưu attribute của track ở cấp track; keyframe chỉ chứa attribute thay
     # đổi. Vì vậy attribute cấp track được áp xuống keyframe (keyframe ưu tiên).
-    track_attributes = normalize_attributes(_get(raw, "attributes"))
+    track_attributes = normalize_attributes(
+        _get(raw, "attributes"), attribute_names=attribute_names
+    )
     if track_attributes:
         keyframes = [
             shape.model_copy(update={"attributes": {**track_attributes, **shape.attributes}})
@@ -324,6 +378,7 @@ def normalize_tag(
     raw: Any,
     *,
     label_names: Mapping[int, str],
+    attribute_names: Mapping[int, str] | None = None,
     index: int = 0,
     frame_range: tuple[int, int] | None = None,
 ) -> NormTag | None:
@@ -342,7 +397,7 @@ def normalize_tag(
         frame=frame,
         label_id=label_id,
         label=label_names.get(label_id, f"label_id={label_id}"),
-        attributes=normalize_attributes(_get(raw, "attributes")),
+        attributes=normalize_attributes(_get(raw, "attributes"), attribute_names=attribute_names),
         source=_as_str(_get(raw, "source")),
         shape_id=tag_id,
     )
@@ -424,17 +479,23 @@ def build_task_data(
     """
     label_schemas = normalize_labels(labels)
     label_names = {label.id: label.name for label in label_schemas}
+    # API CVAT trả `spec_id` là id của attribute -> cần bảng tra id -> tên.
+    attribute_names = attribute_name_index(labels)
 
     shapes, skip_reasons, shapes_total = normalize_shapes(
         _get(annotations, "shapes"),
         label_names=label_names,
+        attribute_names=attribute_names,
         frame_range=frame_range,
     )
 
     tracks: list[NormTrack] = []
     for raw_track in _get(annotations, "tracks") or ():
         track, keyframes, reasons = normalize_track(
-            raw_track, label_names=label_names, frame_range=frame_range
+            raw_track,
+            label_names=label_names,
+            attribute_names=attribute_names,
+            frame_range=frame_range,
         )
         if track is None:
             continue
@@ -445,7 +506,13 @@ def build_task_data(
 
     tags = []
     for index, raw_tag in enumerate(_get(annotations, "tags") or ()):
-        tag = normalize_tag(raw_tag, label_names=label_names, index=index, frame_range=frame_range)
+        tag = normalize_tag(
+            raw_tag,
+            label_names=label_names,
+            attribute_names=attribute_names,
+            index=index,
+            frame_range=frame_range,
+        )
         if tag is not None:
             tags.append(tag)
 

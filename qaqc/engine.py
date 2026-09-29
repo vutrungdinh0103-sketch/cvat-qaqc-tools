@@ -196,6 +196,7 @@ class QAQCEngine:
         return Issue(
             rule_id=finding.rule_id,
             severity=finding.severity,
+            level=get_rule_class(finding.rule_id).level,
             task_id=data.task_id,
             job_id=data.job_for_frame(finding.frame),
             frame=finding.frame,

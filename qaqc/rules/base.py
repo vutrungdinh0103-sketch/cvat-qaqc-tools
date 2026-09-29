@@ -119,6 +119,10 @@ class Rule(ABC):
     params_model: ClassVar[type[RuleParams]] = RuleParams
     #: Nhóm rule (``geometry``/``completeness``/``temporal``) - dùng cho tài liệu.
     group: ClassVar[str] = "general"
+    #: Cấp độ QA theo proposal POC: ``1`` = Overall / Completeness Check (Level 1),
+    #: ``2`` = Detailed Annotation Validation (Level 2). Dùng cho ``--level`` của CLI,
+    #: tham số ``level`` của service và bộ rule ``rules/level1_v1.yaml``.
+    level: ClassVar[int] = 2
 
     def __init__(
         self,

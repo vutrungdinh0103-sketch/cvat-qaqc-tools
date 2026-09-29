@@ -7,10 +7,16 @@
 - ``required_attributes``: object thiếu/để trống attribute bắt buộc.
 - ``unexpected_label``: nhãn không nằm trong danh sách cho phép.
 - ``empty_frame``: frame không có annotation nào trong phạm vi yêu cầu.
+- ``empty_frame_range``: dải frame liên tiếp không có annotation (Level 1).
+- ``object_count``: số object trong frame bất thường (Level 1).
+
+Cả 6 rule đều thuộc **Level 1 - Overall / Completeness Check** của proposal
+(``level = 1``), xem ``rules/level1_v1.yaml`` và ``docs/level1-demo.md``.
 """
 
 from __future__ import annotations
 
+import statistics
 from collections.abc import Iterable
 from typing import ClassVar, Literal
 
@@ -71,6 +77,8 @@ class EmptyFrameRule(Rule):
     default_severity: ClassVar[Severity] = Severity.WARNING
     params_model: ClassVar[type[EmptyFrameParams]] = EmptyFrameParams
     group: ClassVar[str] = "completeness"
+    #: Level 1 - Overall/Completeness Check.
+    level: ClassVar[int] = 1
 
     def check(self, ctx: RuleContext) -> Iterable[Finding]:
         params: EmptyFrameParams = self.params  # type: ignore[assignment]
@@ -130,6 +138,8 @@ class MissingLabelRule(Rule):
     default_severity: ClassVar[Severity] = Severity.ERROR
     params_model: ClassVar[type[MissingLabelParams]] = MissingLabelParams
     group: ClassVar[str] = "completeness"
+    #: Level 1 - Overall/Completeness Check.
+    level: ClassVar[int] = 1
 
     def check(self, ctx: RuleContext) -> Iterable[Finding]:
         params: MissingLabelParams = self.params  # type: ignore[assignment]
@@ -236,6 +246,8 @@ class RequiredAttributesRule(Rule):
     default_severity: ClassVar[Severity] = Severity.ERROR
     params_model: ClassVar[type[RequiredAttributesParams]] = RequiredAttributesParams
     group: ClassVar[str] = "completeness"
+    #: Level 1 - Overall/Completeness Check.
+    level: ClassVar[int] = 1
 
     def check(self, ctx: RuleContext) -> Iterable[Finding]:
         params: RequiredAttributesParams = self.params  # type: ignore[assignment]
@@ -330,6 +342,8 @@ class UnexpectedLabelRule(Rule):
     default_severity: ClassVar[Severity] = Severity.WARNING
     params_model: ClassVar[type[UnexpectedLabelParams]] = UnexpectedLabelParams
     group: ClassVar[str] = "completeness"
+    #: Level 1 - Overall/Completeness Check.
+    level: ClassVar[int] = 1
 
     def check(self, ctx: RuleContext) -> Iterable[Finding]:
         params: UnexpectedLabelParams = self.params  # type: ignore[assignment]
@@ -382,3 +396,232 @@ class UnexpectedLabelRule(Rule):
                     },
                     discriminator=f"tag|label:{tag.label}",
                 )
+
+
+# ---------------------------------------------------------------------------
+# Level 1 - Overall / Completeness Check (proposal mục 4)
+# ---------------------------------------------------------------------------
+class EmptyFrameRangeParams(FrameSelectionParams):
+    """Tham số của rule ``empty_frame_range``."""
+
+    #: Số frame trống **liên tiếp** tối thiểu để báo (2 = báo khi có >= 2 frame liền nhau).
+    min_run_frames: int = Field(default=3, ge=2)
+    #: Bỏ qua các nhãn này khi đếm (giống ``empty_frame``).
+    ignore_labels: tuple[str, ...] = ()
+
+
+class EmptyFrameRangeRule(Rule):
+    """Phát hiện dải frame liên tiếp không có annotation (unlabeled frame range).
+
+    Khác ``empty_frame`` (báo từng frame trống riêng lẻ - rất ồn với video dài),
+    rule này chỉ báo khi số frame trống **liền nhau** >= ``min_run_frames``: dấu hiệu
+    annotator bỏ sót cả một đoạn chứ không phải chỉ vài frame không có object.
+
+    Vì ý nghĩa nằm ở tính *liên tiếp*, rule luôn quét từng frame (bỏ qua
+    ``frame_step``) và ghi chú lại trong ``report.warnings`` nếu người dùng đặt
+    ``frame_step`` khác 1.
+    """
+
+    rule_id: ClassVar[str] = "empty_frame_range"
+    description: ClassVar[str] = (
+        "Dải frame liên tiếp không có annotation nào (unlabeled frame range)."
+    )
+    default_severity: ClassVar[Severity] = Severity.WARNING
+    params_model: ClassVar[type[EmptyFrameRangeParams]] = EmptyFrameRangeParams
+    group: ClassVar[str] = "completeness"
+    #: Level 1 - Overall/Completeness Check.
+    level: ClassVar[int] = 1
+
+    def check(self, ctx: RuleContext) -> Iterable[Finding]:
+        params: EmptyFrameRangeParams = self.params  # type: ignore[assignment]
+        if params.frame_step != 1:
+            self.warnings.append(
+                "Rule 'empty_frame_range' luôn quét từng frame (đã bỏ qua "
+                f'frame_step={params.frame_step}) để giữ đúng nghĩa "liên tiếp".'
+            )
+
+        ignore_labels = set(params.ignore_labels)
+        run: list[int] = []
+        for frame in self._frames(ctx, params):
+            if self._is_empty(ctx, frame, ignore_labels):
+                run.append(frame)
+                continue
+            if len(run) >= params.min_run_frames:
+                yield self._finding_for_run(run, params)
+            run = []
+
+        if len(run) >= params.min_run_frames:
+            yield self._finding_for_run(run, params)
+
+    @staticmethod
+    def _frames(ctx: RuleContext, params: EmptyFrameRangeParams) -> list[int]:
+        """Danh sách frame cần quét (tôn trọng ``start_frame``/``stop_frame``)."""
+        frames = list(ctx.frames)
+        if params.start_frame is not None:
+            frames = [frame for frame in frames if frame >= params.start_frame]
+        if params.stop_frame is not None:
+            frames = [frame for frame in frames if frame <= params.stop_frame]
+        return frames
+
+    @staticmethod
+    def _is_empty(ctx: RuleContext, frame: int, ignore_labels: set[str]) -> bool:
+        """``True`` nếu frame không còn annotation nào sau khi lọc ``ignore_labels``."""
+        objects = [
+            shape for shape in ctx.objects_in_frame(frame) if shape.label not in ignore_labels
+        ]
+        tags = [tag for tag in ctx.data.tags_in_frame(frame) if tag.label not in ignore_labels]
+        return not objects and not tags
+
+    def _finding_for_run(self, run: list[int], params: EmptyFrameRangeParams) -> Finding:
+        """Một lỗi đại diện cho cả dải frame trống (neo ở frame đầu)."""
+        first, last = run[0], run[-1]
+        return self.finding(
+            frame=first,
+            message=(
+                f"[empty_frame_range] frame {first}..{last}: {len(run)} frame liên tiếp "
+                f"không có annotation nào (ngưỡng >= {params.min_run_frames})"
+            ),
+            details={
+                "start_frame": first,
+                "stop_frame": last,
+                "frames": len(run),
+                "min_run_frames": params.min_run_frames,
+            },
+            discriminator=f"run{first}-{last}",
+        )
+
+
+class ObjectCountParams(FrameSelectionParams):
+    """Tham số của rule ``object_count`` (suspicious object count)."""
+
+    #: Frame phải có ít nhất bao nhiêu object (``None`` = không kiểm tra cận dưới).
+    min_objects: int | None = Field(default=None, ge=0)
+    #: Frame không được vượt quá bao nhiêu object (``None`` = không kiểm tra cận trên).
+    max_objects: int | None = Field(default=None, ge=1)
+    #: Báo frame có số object > ``median * outlier_ratio``; ``None`` = tắt kiểm tra ngoại lai.
+    outlier_ratio: float | None = Field(default=None, gt=1.0)
+    #: Cần tối thiểu bao nhiêu frame có object để tính median (tránh ồn với task nhỏ).
+    min_frames_for_outlier: int = Field(default=5, ge=2)
+    #: Nhãn không tính vào số lượng (ví dụ nhãn ``crowd``/``ignore``).
+    ignore_labels: tuple[str, ...] = ()
+
+
+class ObjectCountRule(Rule):
+    """Phát hiện số object trong frame bất thường (suspicious object count).
+
+    Ba kiểu kiểm tra, bật/tắt độc lập bằng tham số - tương ứng 2 mục Level 1:
+
+    - ``min_objects``: "Missing annotation" - frame có ít object hơn quy định.
+    - ``max_objects``: "Suspicious object count" - frame có quá nhiều object
+      (nghi ngờ dán nhầm/nhân bản annotation).
+    - ``outlier_ratio``: "Suspicious object count" theo thống kê - số object vượt xa
+      trung vị của task (median của các frame **có** object, cần tối thiểu
+      ``min_frames_for_outlier`` frame để tránh ồn).
+
+    Chỉ đếm shape (không đếm tag) vì tag không phải "object".
+    """
+
+    rule_id: ClassVar[str] = "object_count"
+    description: ClassVar[str] = (
+        "Số object trong frame bất thường: ít hơn min_objects, nhiều hơn max_objects "
+        "hoặc vượt xa trung vị của task (nghi ngờ thiếu/nhân bản annotation)."
+    )
+    default_severity: ClassVar[Severity] = Severity.WARNING
+    params_model: ClassVar[type[ObjectCountParams]] = ObjectCountParams
+    group: ClassVar[str] = "completeness"
+    #: Level 1 - Overall/Completeness Check.
+    level: ClassVar[int] = 1
+
+    def check(self, ctx: RuleContext) -> Iterable[Finding]:
+        params: ObjectCountParams = self.params  # type: ignore[assignment]
+        if (
+            params.min_objects is None
+            and params.max_objects is None
+            and params.outlier_ratio is None
+        ):
+            self.logger.debug("Rule 'object_count' chưa cấu hình ngưỡng -> bỏ qua.")
+            return
+
+        ignore_labels = set(params.ignore_labels)
+        frames = params.frames(ctx)
+        counts = {
+            frame: sum(
+                1 for shape in ctx.objects_in_frame(frame) if shape.label not in ignore_labels
+            )
+            for frame in frames
+        }
+        median = self._median(counts)
+        outlier_threshold = self._outlier_threshold(median, counts, params)
+
+        for frame in frames:
+            present = counts[frame]
+            reasons = self._reasons(present, outlier_threshold, params)
+            if not reasons:
+                continue
+
+            yield self.finding(
+                frame=frame,
+                message=(
+                    f"[object_count] frame {frame}: {present} object "
+                    f"({', '.join(reasons)}){self._threshold_hint(params, outlier_threshold)}"
+                ),
+                details={
+                    "objects": present,
+                    "min_objects": params.min_objects,
+                    "max_objects": params.max_objects,
+                    "outlier_ratio": params.outlier_ratio,
+                    "outlier_threshold": outlier_threshold,
+                    "median_objects": median,
+                    "reasons": reasons,
+                    "frame_step": params.frame_step,
+                },
+                discriminator="|".join(reasons),
+            )
+
+    @staticmethod
+    def _median(counts: dict[int, int]) -> float | None:
+        """Trung vị số object của các frame **có** object (``None`` nếu không có)."""
+        populated = [count for count in counts.values() if count > 0]
+        return statistics.median(populated) if populated else None
+
+    @staticmethod
+    def _outlier_threshold(
+        median: float | None,
+        counts: dict[int, int],
+        params: ObjectCountParams,
+    ) -> float | None:
+        """Ngưỡng "quá nhiều" theo thống kê (``None`` nếu chưa đủ dữ liệu để kết luận)."""
+        if params.outlier_ratio is None or median is None:
+            return None
+        populated_frames = sum(1 for count in counts.values() if count > 0)
+        if populated_frames < params.min_frames_for_outlier:
+            return None
+        return median * params.outlier_ratio
+
+    @staticmethod
+    def _reasons(
+        present: int,
+        outlier_threshold: float | None,
+        params: ObjectCountParams,
+    ) -> list[str]:
+        """Các lý do frame bị coi là bất thường."""
+        reasons: list[str] = []
+        if params.min_objects is not None and present < params.min_objects:
+            reasons.append("quá ít")
+        if params.max_objects is not None and present > params.max_objects:
+            reasons.append("quá nhiều")
+        if outlier_threshold is not None and present > outlier_threshold:
+            reasons.append("bất thường so với trung vị")
+        return reasons
+
+    @staticmethod
+    def _threshold_hint(params: ObjectCountParams, outlier_threshold: float | None) -> str:
+        """Chuỗi mô tả ngưỡng đang áp dụng (để message tự giải thích được)."""
+        parts: list[str] = []
+        if params.min_objects is not None:
+            parts.append(f"min={params.min_objects}")
+        if params.max_objects is not None:
+            parts.append(f"max={params.max_objects}")
+        if outlier_threshold is not None:
+            parts.append(f"ngưỡng bất thường>{outlier_threshold:g}")
+        return f" (ngưỡng: {', '.join(parts)})" if parts else ""

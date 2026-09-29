@@ -8,6 +8,7 @@ from qaqc.normalize import (
     SKIP_INVALID_POINTS,
     SKIP_OUTSIDE,
     SKIP_UNSUPPORTED_TYPE,
+    attribute_name_index,
     build_task_data,
     extract_frame_sizes,
     normalize_attributes,
@@ -33,6 +34,59 @@ def test_normalize_attributes_both_shapes() -> None:
     assert normalize_attributes({"a": 1}) == {"a": "1"}
     assert normalize_attributes(None) == {}
     assert normalize_attributes([{"value": "x"}]) == {}
+
+
+def test_normalize_attributes_resolves_numeric_spec_id() -> None:
+    """API CVAT trả ``spec_id`` là id số -> đổi sang tên attribute qua schema label."""
+    raw = [{"spec_id": 45, "value": "car"}, {"spec_id": 46, "value": "white"}]
+    attribute_names = {45: "vehicle_type", 46: "color"}
+    assert normalize_attributes(raw, attribute_names=attribute_names) == {
+        "vehicle_type": "car",
+        "color": "white",
+    }
+    # Không có bảng tra -> giữ id dạng chuỗi thay vì âm thầm bỏ attribute.
+    assert normalize_attributes(raw) == {"45": "car", "46": "white"}
+
+
+def test_attribute_name_index_from_label_schema() -> None:
+    """``attribute_name_index`` đọc id + tên attribute của mọi label."""
+    labels = [
+        {
+            "id": 1,
+            "name": "vehicle",
+            "attributes": [{"id": 45, "name": "vehicle_type"}, {"id": 46, "name": "color"}],
+        },
+        {"id": 2, "name": "license_plate", "attributes": [{"id": 47, "name": "plate_number"}]},
+    ]
+    assert attribute_name_index(labels) == {
+        45: "vehicle_type",
+        46: "color",
+        47: "plate_number",
+    }
+    assert attribute_name_index(None) == {}
+
+
+def test_build_task_data_maps_numeric_attribute_ids() -> None:
+    """``build_task_data`` tự dựng bảng tra -> attribute theo id vẫn ra đúng tên."""
+    data = build_task_data(
+        task_id=1,
+        size=2,
+        labels=[{"id": 1, "name": "vehicle", "attributes": [{"id": 45, "name": "color"}]}],
+        annotations={
+            "shapes": [
+                {
+                    "id": 1,
+                    "type": "rectangle",
+                    "frame": 0,
+                    "label_id": 1,
+                    "points": [0, 0, 10, 10],
+                    "attributes": [{"spec_id": 45, "value": "white"}],
+                }
+            ]
+        },
+        jobs=[],
+    )
+    assert data.shapes[0].attributes == {"color": "white"}
 
 
 def test_normalize_label_and_attribute_schema() -> None:

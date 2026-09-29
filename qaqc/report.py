@@ -29,6 +29,7 @@ EXIT_API_ERROR: Final[int] = 3
 CSV_FIELDS: Final[tuple[str, ...]] = (
     "rule_id",
     "severity",
+    "level",
     "task_id",
     "job_id",
     "frame",
@@ -79,6 +80,8 @@ class Issue(BaseModel):
     frame: int
     message: str
     fingerprint: str
+    #: Cấp độ QA của rule đã sinh ra lỗi (``1`` = Overall/Completeness, ``2`` = Detailed).
+    level: int = 2
     job_id: int | None = None
     object_key: str | None = None
     object_keys: tuple[str, ...] = ()
@@ -97,6 +100,7 @@ class Issue(BaseModel):
         return {
             "rule_id": self.rule_id,
             "severity": self.severity.value,
+            "level": str(self.level),
             "task_id": str(self.task_id),
             "job_id": "" if self.job_id is None else str(self.job_id),
             "frame": str(self.frame),
@@ -156,6 +160,18 @@ class QAReport(BaseModel):
         return counts
 
     @property
+    def counts_by_level(self) -> dict[str, int]:
+        """Số lỗi theo cấp độ QA (``"1"`` = Overall/Completeness, ``"2"`` = Detailed).
+
+        Chỉ chứa các cấp độ thực sự có lỗi để báo cáo gọn (khác ``counts_by_severity``).
+        """
+        counts: dict[str, int] = {}
+        for issue in self.issues:
+            key = str(issue.level)
+            counts[key] = counts.get(key, 0) + 1
+        return dict(sorted(counts.items()))
+
+    @property
     def max_severity(self) -> Severity | None:
         """Mức độ nghiêm trọng nhất trong báo cáo (``None`` nếu không có lỗi)."""
         if not self.issues:
@@ -204,6 +220,16 @@ class QAReport(BaseModel):
                 "Theo rule: " + ", ".join(f"{rule}={count}" for rule, count in by_rule.items())
             )
 
+        by_level = self.counts_by_level
+        if by_level:
+            labels = {"1": "Level 1 (overall)", "2": "Level 2 (detailed)"}
+            lines.append(
+                "Theo cấp độ: "
+                + ", ".join(
+                    f"{labels.get(level, level)}={count}" for level, count in by_level.items()
+                )
+            )
+
         for issue in self.issues[:max_issues]:
             lines.append(f"  - {issue.message}")
         if len(self.issues) > max_issues:
@@ -219,6 +245,7 @@ class QAReport(BaseModel):
         data = self.model_dump(mode="json")
         data["counts_by_rule"] = self.counts_by_rule
         data["counts_by_severity"] = self.counts_by_severity
+        data["counts_by_level"] = self.counts_by_level
         return data
 
     def to_csv_rows(self) -> list[dict[str, str]]:

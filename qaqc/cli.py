@@ -6,6 +6,7 @@ Lệnh con:
 - ``publish``  : chạy QA/QC rồi đẩy lỗi thành issue trên CVAT (idempotent).
 - ``rules``    : liệt kê rule + tham số (dạng text hoặc JSON).
 - ``validate`` : kiểm tra tính hợp lệ của file cấu hình rule YAML.
+- ``serve``    : mở QA/QC service trên localhost (web UI + API cho plugin CVAT UI).
 - ``legacy``   : chạy CLI cũ (giống ``python checker.py``) qua module mới.
 
 Mã thoát (giống CLI cũ): ``0`` thành công, ``1`` có lỗi >= ngưỡng ``--fail-on``,
@@ -19,6 +20,7 @@ import json
 import logging
 import sys
 from collections.abc import Callable, Sequence
+from pathlib import Path
 from typing import Any
 
 import yaml
@@ -35,7 +37,8 @@ from .report import (
     EXIT_OK,
     QAReport,
 )
-from .rules import registered_rule_ids, rule_catalog
+from .rules import registered_rule_ids, rule_catalog, rule_ids_for_level
+from .service import DEFAULT_PORT, ServiceOptions, serve
 
 LOGGER = logging.getLogger("cvat_qaqc.cli")
 
@@ -57,6 +60,12 @@ def _add_common_options(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--only",
         help="Chỉ chạy các rule này (phân tách bằng dấu phẩy)",
+    )
+    parser.add_argument(
+        "--level",
+        type=int,
+        choices=(1, 2),
+        help="Chỉ chạy rule thuộc cấp độ này (1 = Overall/Completeness, 2 = Detailed)",
     )
     parser.add_argument(
         "--disable",
@@ -183,6 +192,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     rules_parser = subparsers.add_parser("rules", help="Liệt kê các rule có sẵn")
     rules_parser.add_argument("--json", action="store_true", help="In ra JSON")
+    rules_parser.add_argument(
+        "--level",
+        type=int,
+        choices=(1, 2),
+        help="Chỉ liệt kê rule thuộc cấp độ này (1 = Overall/Completeness, 2 = Detailed)",
+    )
     rules_parser.set_defaults(func=cmd_rules)
 
     validate_parser = subparsers.add_parser("validate", help="Kiểm tra file cấu hình rule YAML")
@@ -193,6 +208,57 @@ def build_parser() -> argparse.ArgumentParser:
         "legacy",
         help="Chạy CLI cũ (tương đương 'python checker.py') qua module mới",
     )
+    serve_parser = subparsers.add_parser(
+        "serve",
+        help="Chạy QA/QC service trên localhost (web UI + API cho plugin CVAT UI)",
+    )
+    serve_parser.add_argument(
+        "--port", type=int, default=DEFAULT_PORT, help="Cổng lắng nghe của service"
+    )
+    serve_parser.add_argument(
+        "--bind-host",
+        default="127.0.0.1",
+        help="Địa chỉ bind (127.0.0.1 = chỉ truy cập được từ máy đang chạy)",
+    )
+    serve_parser.add_argument("--open", action="store_true", help="Tự mở trình duyệt")
+    serve_parser.add_argument(
+        "--demo", action="store_true", help="Dùng dữ liệu mẫu dựng sẵn (không cần CVAT)"
+    )
+    serve_parser.add_argument(
+        "--source-file", help="Đọc dữ liệu task từ file JSON (dạng annotations của CVAT)"
+    )
+    serve_parser.add_argument(
+        "-r",
+        "--rules",
+        default=None,
+        help=f"File cấu hình rule YAML (mặc định: {DEFAULT_RULES_FILE} nếu tồn tại)",
+    )
+    serve_parser.add_argument("--only", help="Chỉ chạy các rule này (phân tách bằng dấu phẩy)")
+    serve_parser.add_argument(
+        "--level",
+        type=int,
+        choices=(1, 2),
+        help="Chỉ chạy rule thuộc cấp độ này (1 = Overall/Completeness, 2 = Detailed)",
+    )
+    serve_parser.add_argument("--disable", help="Tắt các rule này (phân tách bằng dấu phẩy)")
+    serve_parser.add_argument(
+        "--max-issues", type=int, default=0, help="Giới hạn số lỗi mỗi báo cáo (0 = vô hạn)"
+    )
+    serve_parser.add_argument(
+        "--cache-ttl", type=float, default=30.0, help="Cache báo cáo trong bao nhiêu giây (0 = tắt)"
+    )
+    serve_parser.add_argument(
+        "--env-file", default=".env", help="File .env chứa thông tin kết nối CVAT"
+    )
+    serve_parser.add_argument("--host", help="URL CVAT server (mặc định: CVAT_HOST)")
+    serve_parser.add_argument("--user", help="Tài khoản CVAT (mặc định: CVAT_USER)")
+    serve_parser.add_argument("--password", help="Mật khẩu CVAT (mặc định: CVAT_PASS)")
+    serve_parser.add_argument("--token", help="Access token CVAT (mặc định: CVAT_TOKEN)")
+    serve_parser.add_argument(
+        "-v", "--verbose", action="count", default=0, help="Tăng mức độ log (-v: INFO, -vv: DEBUG)"
+    )
+    serve_parser.set_defaults(func=cmd_serve)
+
     legacy_parser.set_defaults(func=cmd_legacy)
 
     return parser
@@ -207,6 +273,32 @@ def _split_csv(value: str | None) -> list[str] | None:
         return None
     items = [item.strip() for item in value.split(",")]
     return [item for item in items if item] or None
+
+
+def _only_rule_ids(args: argparse.Namespace) -> list[str] | None:
+    """Danh sách rule sẽ chạy theo ``--only`` và ``--level`` (``None`` = theo file YAML).
+
+    ``--level`` (1 = Overall/Completeness, 2 = Detailed) lọc theo cấp độ QA của rule;
+    nếu dùng kèm ``--only`` thì lấy phần giao của hai điều kiện.
+
+    :raises ValueError: nếu ``--level`` không khớp rule nào trong ``--only``.
+    """
+    explicit = _split_csv(getattr(args, "only", None))
+    level = getattr(args, "level", None)
+    if level is None:
+        return explicit
+
+    level_ids = rule_ids_for_level(int(level))
+    if explicit is None:
+        return level_ids
+
+    selected = [rule_id for rule_id in explicit if rule_id in set(level_ids)]
+    if not selected:
+        raise ValueError(
+            f"--level {level} không khớp rule nào trong --only "
+            f"({', '.join(explicit)}). Rule cấp độ {level}: {', '.join(level_ids)}"
+        )
+    return selected
 
 
 def _parse_param_overrides(entries: Sequence[str]) -> dict[str, dict[str, Any]]:
@@ -239,6 +331,9 @@ def _rule_config_from_args(args: argparse.Namespace) -> RuleConfig:
     config = RuleConfig.load(args.rules) if args.rules else load_rule_config(None)
     config.validate_rule_ids(registered_rule_ids())
 
+    # `--level` (và `--only`) chọn tập rule sẽ chạy trước khi áp các ghi đè khác.
+    only_ids = _only_rule_ids(args)
+
     overrides = _parse_param_overrides(args.param)
     if args.iou is not None:
         overrides.setdefault("duplicate_bbox", {})["iou_threshold"] = args.iou
@@ -254,10 +349,10 @@ def _rule_config_from_args(args: argparse.Namespace) -> RuleConfig:
             )
 
     return config.with_overrides(
-        only=_split_csv(args.only),
+        only=only_ids,
         disabled=_split_csv(args.disable),
         extra_params=overrides,
-        name_suffix="cli" if (args.only or args.disable or overrides) else None,
+        name_suffix="cli" if (only_ids or args.disable or overrides) else None,
     )
 
 
@@ -366,21 +461,28 @@ def cmd_publish(args: argparse.Namespace) -> int:
 
 def cmd_rules(args: argparse.Namespace) -> int:
     """``qaqc rules``: liệt kê rule và tham số."""
+    level = getattr(args, "level", None)
+    catalog = rule_catalog()
+    if level is not None:
+        catalog = [item for item in catalog if item["level"] == level]
+
     if args.json:
-        print(json.dumps(rule_catalog(), ensure_ascii=False, indent=2))
+        print(json.dumps(catalog, ensure_ascii=False, indent=2))
         return EXIT_OK
 
-    print(f"Tổng số rule: {len(registered_rule_ids())}")
+    scope = f" (cấp độ {level})" if level is not None else ""
+    print(f"Tổng số rule{scope}: {len(catalog)}")
     current_group = None
-    for item in rule_catalog():
+    for item in catalog:
         if item["group"] != current_group:
             current_group = item["group"]
             print(f"\n== Nhóm {current_group} ==")
-        print(f"- {item['rule_id']} (mặc định: {item['default_severity']})")
+        print(f"- {item['rule_id']} (mặc định: {item['default_severity']}, level {item['level']})")
         print(f"    {item['description']}")
     print(
         "\nDùng 'python -m qaqc rules --json' để xem schema tham số chi tiết, "
-        "hoặc xem rules/driving_v1.yaml để biết ví dụ cấu hình."
+        "'python -m qaqc rules --level 1' để xem riêng bộ rule Level 1, "
+        "hoặc xem rules/driving_v1.yaml + rules/level1_v1.yaml để biết ví dụ cấu hình."
     )
     return EXIT_OK
 
@@ -419,6 +521,77 @@ def cmd_legacy(args: argparse.Namespace) -> int:
     return legacy_main([])
 
 
+def cmd_serve(args: argparse.Namespace) -> int:
+    """``qaqc serve``: mở QA/QC service trên localhost (web UI + API JSON/CSV)."""
+    options = ServiceOptions(
+        rules=args.rules,
+        only=args.only,
+        level=args.level,
+        disable=args.disable,
+        max_issues=args.max_issues,
+        source_file=args.source_file,
+        demo=args.demo,
+        env_file=args.env_file,
+        host=args.host,
+        user=args.user,
+        password=args.password,
+        token=args.token,
+        cache_ttl=args.cache_ttl,
+    )
+
+    if not options.demo and not options.source_file:
+        # Kiểm tra cấu hình kết nối ngay khi khởi động để báo lỗi sớm (exit code 2)
+        # thay vì để người dùng thấy lỗi trên web UI.
+        try:
+            config = CVATConfig.from_env(
+                env_file=args.env_file,
+                host=args.host,
+                user=args.user,
+                password=args.password,
+                token=args.token,
+            )
+        except ValueError as exc:
+            # In kèm cách sửa cụ thể: người dùng thường chạy `serve` khi chưa có .env.
+            _print_serve_config_hint(exc, args)
+            return EXIT_CONFIG_ERROR
+        account = config.user or "access token"
+        print(f"Kết nối CVAT: {config.host} (tài khoản: {account})", flush=True)
+
+    serve(options, bind_host=args.bind_host, port=args.port, open_browser=args.open)
+    return EXIT_OK
+
+
+def _print_serve_config_hint(exc: ValueError, args: argparse.Namespace) -> None:
+    """In lỗi cấu hình của ``qaqc serve`` kèm cách sửa cụ thể (thay vì một dòng trơ)."""
+    env_path = Path(args.env_file)
+    print(f"Lỗi cấu hình: {exc}", file=sys.stderr)
+    if not env_path.exists():
+        print(f"Không tìm thấy file cấu hình: {env_path.resolve()}", file=sys.stderr)
+    print("Cách sửa:", file=sys.stderr)
+    print(
+        "  1. Xem thử ngay (không cần CVAT) : python -m qaqc serve --demo --open",
+        file=sys.stderr,
+    )
+    print(
+        f"  2. Tạo file .env từ mẫu         : Copy-Item .env.example {args.env_file}",
+        file=sys.stderr,
+    )
+    print(
+        "     rồi điền CVAT_HOST + (CVAT_USER/CVAT_PASS hoặc CVAT_TOKEN)",
+        file=sys.stderr,
+    )
+    print(
+        "  3. Truyền tham số trực tiếp     : python -m qaqc serve --host <url> "
+        "--user <u> --password <p>",
+        file=sys.stderr,
+    )
+    print("     (hoặc --token <token> thay cho --user/--password)", file=sys.stderr)
+    print(
+        "  4. Dùng file .env ở nơi khác    : python -m qaqc serve --env-file <đường-dẫn>",
+        file=sys.stderr,
+    )
+
+
 def _with_api_error_handling(func: Callable[[], int]) -> int:
     """Chuẩn hoá lỗi cấu hình/kết nối thành mã thoát ``2``/``3``."""
     from cvat_sdk import exceptions
@@ -451,8 +624,33 @@ def _with_api_error_handling(func: Callable[[], int]) -> int:
         raise
 
 
+def _configure_stdout_encoding() -> None:
+    """Đảm bảo in được tiếng Việt trên console Windows dùng codepage cũ (cp1252/cp437).
+
+    Một số console Windows mặc định không encode được ký tự tiếng Việt, khiến mọi
+    lệnh ``python -m qaqc ...`` chết với ``UnicodeEncodeError``. Hàm này chỉ đổi
+    encoding của ``stdout``/``stderr`` sang UTF-8 **khi cần** (nếu encoding hiện tại
+    đã in được tiếng Việt thì giữ nguyên, tránh làm hỏng màu/ký tự của terminal).
+    """
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is None:  # pytest capture / stream không hỗ trợ
+            continue
+        try:
+            "ổ".encode(stream.encoding or "utf-8")
+        except (UnicodeEncodeError, LookupError):
+            pass
+        else:
+            continue
+        try:
+            reconfigure(encoding="utf-8", errors="replace")
+        except (ValueError, OSError):  # pragma: no cover - phụ thuộc terminal
+            LOGGER.debug("Không đổi được encoding của %s sang UTF-8.", stream)
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     """Entry point ``python -m qaqc``."""
+    _configure_stdout_encoding()
     arguments = list(sys.argv[1:] if argv is None else argv)
 
     # `legacy` được xử lý trước khi argparse phân tích để chuyển nguyên tham số

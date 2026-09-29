@@ -69,20 +69,29 @@ class CVATConfig(BaseModel):
 
         Dùng Access Token nếu có, ngược lại dùng user/password.
 
+        Ghi chú API (đã kiểm chứng trên CVAT v2.74.1 + ``cvat-sdk`` 2.75):
+
+        - ``Client.login()`` chỉ nhận ``credentials``; xác thực token nên đặt
+          ``api_client.configuration.api_key['tokenAuth']`` để SDK gửi header
+          ``Authorization: Token <token>``.
+        - Cách ``AccessTokenCredentials``/``configuration.access_token`` khiến SDK gửi
+          ``Bearer <token>`` và CVAT trả về **401** (token dạng DRF Token).
+
         :raises ValueError: nếu thiếu cả token lẫn user/password.
         """
         from cvat_sdk import Client  # import muộn: engine không cần phụ thuộc SDK
 
+        if self.token is None and self.credentials is None:
+            raise ValueError(
+                "Thiếu thông tin xác thực CVAT: cần CVAT_TOKEN hoặc CVAT_USER/CVAT_PASS."
+            )
+
         client = Client(url=self.host)
         try:
             if self.token is not None:
-                client.login(access_token=self.token.get_secret_value())
-            elif self.credentials is not None:
-                client.login(credentials=self.credentials)
+                client.api_client.configuration.api_key["tokenAuth"] = self.token.get_secret_value()
             else:
-                raise ValueError(
-                    "Thiếu thông tin xác thực CVAT: cần CVAT_TOKEN hoặc CVAT_USER/CVAT_PASS."
-                )
+                client.login(credentials=self.credentials)
         except Exception:
             client.close()
             raise

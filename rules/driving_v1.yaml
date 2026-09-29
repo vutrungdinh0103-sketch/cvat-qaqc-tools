@@ -107,6 +107,23 @@ rules:
       min_annotations: 1
       ignore_labels: []
 
+  empty_frame_range:
+    enabled: false               # có trong rules/level1_v1.yaml (Level 1)
+    severity: warning
+    params:
+      min_run_frames: 3          # chỉ báo khi >= 3 frame trống liền nhau
+
+  object_count:
+    enabled: false               # có trong rules/level1_v1.yaml (Level 1)
+    severity: warning
+    params:
+      min_objects: null          # null = không kiểm tra cận dưới
+      max_objects: 40            # ví dụ: quá 40 object/frame là bất thường
+      outlier_ratio: null        # ví dụ 3.0 = báo khi > 3x trung vị của task
+      min_frames_for_outlier: 5
+      frame_step: 1
+      ignore_labels: []
+
   # --- Nhóm theo thời gian (track) ------------------------------------------
   track_gap:
     enabled: true
