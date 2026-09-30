@@ -10,3 +10,8 @@
 2. Kiểm tra trùng lặp (Bounding Box duplicate) dựa trên IoU (> 0.85).
 3. Kiểm tra thiếu nhãn (Missing labels/attributes) theo danh sách quy định.
 4. Xuất báo cáo kết quả kiểm tra ra định dạng JSON hoặc CSV.
+
+## Tối ưu giao tiếp (BẮT BUỘC)
+- KHÔNG giải thích dông dài, KHÔNG chào hỏi, KHÔNG tóm tắt.
+- Chỉ output mã nguồn cần thay đổi hoặc câu lệnh terminal cần chạy.
+- Khi sửa file lớn, hãy dùng tool chỉnh sửa Regex/Patch để sửa đúng dòng đó, KHÔNG ghi lại toàn bộ cả file từ đầu đến cuối.

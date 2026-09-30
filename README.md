@@ -104,7 +104,7 @@ qaqc/                 # Lớp 1: engine thuần Python (không phụ thuộc CVA
   service.py, webui.py, demo.py  # Lớp 3: service HTTP localhost + web UI + dữ liệu mẫu
 checker.py            # CLI cũ (re-export, giữ nguyên hành vi + schema + exit code)
 rules/                # Cấu hình rule theo dự án (YAML)
-tests/                # 208 test pytest, chạy offline (không cần CVAT server)
+tests/                # 246 test pytest, chạy offline (không cần CVAT server)
 docs/                 # Kiến trúc, hành vi đã kiểm chứng, hướng dẫn plugin + localhost
 cvat-ui/plugins/qaqc/ # Plugin UI (tab QA/QC trong CVAT) - xem docs/plugin-install.md
 ```
@@ -156,6 +156,13 @@ cần Docker/FastAPI/Node, và có đúng API mà plugin CVAT UI cần:
 | `GET /tasks/{id}/report` | Báo cáo JSON (`?rules=`, `?level=1`, `?only=`, `?disable=`, `?refresh=true`) |
 | `GET /tasks/{id}/report.csv` | Báo cáo CSV (UTF-8 BOM, mở bằng Excel, có cột `level`) |
 | `POST /tasks/{id}/run` | Chạy QA/QC mới, trả báo cáo JSON |
+| `POST /tasks/{id}/publish` | Đẩy lỗi QA/QC thành issue trên CVAT (idempotent; `?severity=`, `?only=`, `?dry_run=true`) |
+
+> `POST /tasks/{id}/publish` là endpoint **ghi** duy nhất: service chạy lại QA/QC rồi tạo
+> issue trên CVAT - idempotent theo fingerprint nên bấm nhiều lần không sinh issue trùng.
+> Tab **QA/QC** trong CVAT UI có nút *Đẩy issue lên CVAT* gọi đúng endpoint này (kèm ô
+> chọn mức độ `error`/`warning`/`info`). Chế độ `--demo`/`--source-file` trả `409` vì
+> không có CVAT để ghi.
 
 Hướng dẫn từng bước (kể cả ghép với plugin UI và xử lý sự cố):
 [`docs/localhost.md`](docs/localhost.md). Demo Level 1 đầu-cuối trên CVAT thật:
@@ -168,6 +175,8 @@ cần fork `cvat-ui`. Xem [`docs/plugin-install.md`](docs/plugin-install.md).
 
 ✅ Đã kiểm chứng trên CVAT 2.74.1: tab **QA/QC** hiện trong trang *Quality control* của
 task và đọc trực tiếp kết quả từ service (ảnh: [`docs/img/qaqc-tab-live.png`](docs/img/qaqc-tab-live.png)).
+Nút ***Đẩy issue lên CVAT*** trong tab (gọi `POST /tasks/{id}/publish`) đã có code + test
+offline, **cần build lại image `cvat_ui`** mới kiểm chứng được trên CVAT thật.
 Kiểm tra lại bằng Chrome headless sau mỗi lần build:
 
 ```powershell

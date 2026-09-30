@@ -11,7 +11,7 @@ Chi tiết cài đặt & build: [`docs/plugin-install.md`](../../../docs/plugin-
 | --- | --- |
 | `src/ts/index.tsx` | Entry point (webpack yêu cầu). Đăng ký tab qua `window.cvatUI.registerComponent` |
 | `src/ts/qaqc-tab.tsx` | Component hiển thị bảng lỗi (lọc theo mức độ, nút chạy lại) |
-| `src/ts/service-client.ts` | Gọi QA service (`GET/POST /tasks/{id}/report`), cấu hình URL |
+| `src/ts/service-client.ts` | Gọi QA service (`/health`, `/tasks/{id}/report`, `/tasks/{id}/run`, `/tasks/{id}/publish`), cấu hình URL |
 
 ## Cơ chế (đã kiểm chứng trên CVAT v2.76)
 
@@ -36,10 +36,17 @@ Muốn giữ lại, dùng `actionCreators.updateUIComponent('qualityControlPage.
   [`docs/verified-behaviors.md`](../../../docs/verified-behaviors.md).
 - Plugin vẫn **chưa được compile trong workspace repo này** (không có `node_modules`):
   cần build image `cvat_ui` theo [`docs/plugin-install.md`](../../../docs/plugin-install.md).
+  Riêng nút *Đẩy issue lên CVAT* (mới thêm) cần **build lại** image `cvat_ui` rồi chạy
+  `scripts/check_plugin_tab.mjs` để kiểm chứng trên CVAT thật; phía Python đã có 14 test
+  offline cho endpoint này (`tests/test_service.py`).
 - Tab có bộ lọc **Level 1 / Level 2 / tất cả** và cột `Cấp độ` (dữ liệu `level` +
   `counts_by_level` do QA service trả về).
 - Tab chỉ render cho **task** (trả `null` cho project/job: QA service chỉ có endpoint
   theo task id). Bộ lọc cấp độ và bảng lỗi nằm trong `qaqc-tab.tsx`.
+- Tab có nút **Đẩy issue lên CVAT** (`POST /tasks/{id}/publish`): chọn mức độ
+  (`error`/`warning`/`info`) rồi bấm - có hộp xác nhận vì đây là thao tác **ghi** lên
+  CVAT; kết quả hiện số `tạo mới / đã tồn tại / mở lại`. Service luôn chạy lại QA/QC
+  khi publish (không dùng cache) và idempotent theo fingerprint.
 - QA service HTTP **đã có sẵn trong repo**: `python -m qaqc serve` (mặc định
   `http://127.0.0.1:8081`) - có web UI để xem kết quả và đúng các endpoint mà plugin
   gọi. Khi chưa chạy service, tab hiển thị lỗi kết nối kèm gợi ý kiểm tra

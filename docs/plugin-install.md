@@ -160,7 +160,8 @@ exit code `0`/`1` - tiện gắn vào CI sau khi build image. Không có mật k
 | Trang Quality control chỉ có tab **Requirements** | Plugin chưa vào store. Kiểm tra theo thứ tự: **(1)** `cvat_ui` dùng đúng image: `docker ps --format '{{.Names}} {{.Image}}'` → `cvat/ui:qaqc-2.74.1`; bundle có plugin: `docker exec cvat_ui grep -c qualityControlPage.tabs.items /usr/share/nginx/html/assets/plugin_1.*.min.js` (phải ≥ 1). **(2)** Plugin có `dispatch(actionCreators.addUIComponent(...))` chưa (V31) - chỉ gọi action creator thì tab **im lặng** không hiện, không có lỗi nào trong console. **(3)** Hard-refresh trình duyệt (Ctrl+Shift+R): `index.html` trỏ tới hash bundle mới sau mỗi lần build. **(4)** Đúng route chưa: tab nằm ở `/tasks/<id>/quality-control`, **không** có ở danh sách Tasks hay trang chi tiết task (V26). |
 | Tab hiện nhưng báo "Không lấy được kết quả QA/QC" | QA service chưa chạy (`python -m qaqc serve --rules rules/level1_v1.yaml`) hoặc sai URL: plugin tự dùng `http://127.0.0.1:8081` khi UI mở ở localhost; ép thủ công bằng `localStorage.setItem('qaqc.serviceUrl', 'http://127.0.0.1:8081')` rồi tải lại (V27) |
 | `http://localhost:8080/tasks/9/quality-control` bị "connection closed" | Port-forward của Docker Desktop bị kẹt sau khi restart engine: `docker restart traefik cvat_ui` (V30) |
-
+| Tab QA/QC **từng hiện** rồi biến mất sau khi restart / `docker compose up` | `cvat_ui` bị tạo lại bằng image gốc `cvat/ui:v2.74.1` vì lệnh thiếu file overlay (đã gặp thật): `docker ps --format '{{.Names}} {{.Image}}'` để xác nhận; sửa bằng `docker compose -f docker-compose.yml -f docker-compose.qaqc.overlay.yml up -d --force-recreate cvat_ui` rồi Ctrl+Shift+R. Build lại image **cùng tag** cũng cần `--force-recreate` (compose so sánh config, không so sánh image id) |
+| Tab hiện nhưng bảng lỗi báo `HTTP 502` kèm `Unable to log in with provided credentials` | `.env` sai tài khoản/mật khẩu CVAT (ví dụ giữ `admin/admin` của `.env.example`). Xem username thật: `docker exec cvat_db psql -U root -d cvat -t -A -c "select username from auth_user;"`; hoặc tạo Access Token (*Account → Security → Access tokens*) và khai `CVAT_TOKEN` |
 ## ⚠️ Lưu ý đã kiểm chứng
 
 - **API plugin của CVAT v2.74.1 giống v2.76**: `window.cvatUI.registerComponent`,
@@ -176,9 +177,11 @@ exit code `0`/`1` - tiện gắn vào CI sau khi build image. Không có mật k
   để tự render lại nội dung đó (xem V12 trong `verified-behaviors.md`).
 - **QA service phải chạy trước**: `python -m qaqc serve --rules rules/level1_v1.yaml`
   (mặc định `http://127.0.0.1:8081`). Service không có xác thực và chỉ bind localhost.
-- Service **không ghi** gì lên CVAT; muốn đẩy lỗi thành issue (idempotent) thì dùng
-  CLI `python -m qaqc publish` - issue hiện trong tab *Issues* kèm jump-to-frame
-  (xem [`docs/level1-demo.md`](level1-demo.md)).
+- Service **ghi CVAT chỉ khi** bạn bấm *Đẩy issue lên CVAT* trong tab (gọi
+  `POST /tasks/{id}/publish`) hoặc chạy CLI `python -m qaqc publish`; cả hai dùng chung
+  một publisher, idempotent theo fingerprint nên bấm nhiều lần không sinh issue trùng.
+  Issue hiện trong tab *Issues* kèm jump-to-frame (xem [`docs/level1-demo.md`](level1-demo.md)).
+  Service chạy `--demo`/`--source-file` trả `409` cho endpoint này (không có CVAT để ghi).
 
 ## Điểm mở rộng khác có thể dùng
 

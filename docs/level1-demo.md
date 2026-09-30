@@ -172,7 +172,8 @@ node scripts/check_plugin_tab.mjs --task <task_id> --user dinhvt --password *** 
 4. **Lỗi nằm trong CVAT** (90s): `python -m qaqc publish ...` → mở panel *Issues*,
    click issue frame 5 (`thiếu attribute 'color'`) → CVAT nhảy đúng frame/box.
 5. **Trong UI** (60s): tab **QA/QC** (nếu đã build) hoặc web UI localhost - đổi bộ lọc
-   *Level 1 / Level 2 / tất cả* để thấy phạm vi từng cấp độ.
+   *Level 1 / Level 2 / tất cả* để thấy phạm vi từng cấp độ; chọn mức độ rồi bấm
+   **Đẩy issue lên CVAT** trong tab để làm bước 4 **không cần gõ lệnh**.
 6. **Chạy trên task thật** (60s): `python -m qaqc run 3 --rules rules/level1_v1.yaml`
    (task DAY08) - lưu ý kết quả phản ánh **cấu hình nhãn của dự án**: nếu project dùng
    nhãn `car` thay vì `vehicle` thì `unexpected_label`/`missing_label` sẽ báo rất nhiều.

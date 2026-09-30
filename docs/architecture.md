@@ -27,7 +27,7 @@
 ```
 
 **Lợi ích của việc tách lớp 1:** toàn bộ logic QA/QC test được **offline** bằng
-`TaskData` dựng tay hoặc fixture JSON (232 test chạy trong ~7 giây, không cần CVAT
+`TaskData` dựng tay hoặc fixture JSON (246 test chạy trong ~7 giây, không cần CVAT
 server). Chỉ 2 module (`data_source.py`, `publishers/cvat_issues.py`) import
 `cvat_sdk` — service HTTP cũng không cần import SDK khi chạy `--demo`/`--source-file`.
 
@@ -78,14 +78,15 @@ plugin CVAT UI cần.
 Điểm cần nhớ khi bảo trì:
 
 - Endpoint phải **trùng** với `cvat-ui/plugins/qaqc/src/ts/service-client.ts`
-  (`/health`, `/tasks/{id}/report`, `/tasks/{id}/report.csv`, `/tasks/{id}/run`);
+  (`/health`, `/tasks/{id}/report`, `/tasks/{id}/report.csv`, `/tasks/{id}/run`,
+  `POST /tasks/{id}/publish`);
   đổi API ở đây thì phải đổi cả plugin.
 - CORS (`Access-Control-Allow-Origin: *`) là **bắt buộc** để UI CVAT (origin khác)
   gọi được; mặc định bind `127.0.0.1` nên vẫn chỉ dùng nội bộ máy.
 - Cache theo `(task_id, RuleConfig.config_hash)` → đổi tham số rule sẽ tự tính lại;
   `POST /run` và `?refresh=true` luôn bỏ cache.
 - `--demo`/`--source-file` giúp test end-to-end mà không cần CVAT (đây cũng là cách
-  `tests/test_service.py` chạy 23 test offline).
+  `tests/test_service.py` chạy 41 test offline).
 
 ## Quyết định thiết kế đáng chú ý
 
@@ -117,7 +118,12 @@ plugin CVAT UI cần.
   demo trên CVAT thật (`docs/img/qaqc-tab-live.png`); script kiểm tra lại:
   `scripts/check_plugin_tab.mjs` (Chrome headless) → tổng **232 test** (offline) + 1
   kiểm tra UI tùy chọn; kịch bản demo: [`level1-demo.md`](level1-demo.md).
+- **Đã xong (v0.3.x - đẩy issue lên CVAT từ UI):** `POST /tasks/{id}/publish` (service
+  chạy lại QA/QC rồi tạo issue bằng **đúng** `CvatIssuePublisher` của CLI, idempotent theo
+  fingerprint; tham số `severity`/`dry_run`/`resolve_stale`/`reopen_resolved`/`post_details`/
+  `max_issues_*`), `publish_supported` trong `/health`, `publishTaskIssues()` trong
+  `service-client.ts` + nút **Đẩy issue lên CVAT** và ô chọn mức độ trong tab QA/QC →
+  tổng **246 test**.
 - **Tiếp theo (tuỳ chọn):** hàng đợi job + nhiều worker cho service (FastAPI/uvicorn
   nếu cần mở rộng); đồng bộ fingerprint vào Redis/SQLite để tránh đọc lại issue;
-  endpoint publish issue qua HTTP; rule mới theo yêu cầu dự án (`cannot_overlap`,
-  `require_nearby`, kiểm tra 3D).
+  rule mới theo yêu cầu dự án (`cannot_overlap`, `require_nearby`, kiểm tra 3D).

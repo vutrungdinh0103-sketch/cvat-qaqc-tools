@@ -11,7 +11,14 @@
 
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 
-import { QAQCReport, fetchTaskReport, runTaskQAQC, serviceBaseUrl } from './service-client';
+import {
+    PublishResult,
+    QAQCReport,
+    fetchTaskReport,
+    publishTaskIssues,
+    runTaskQAQC,
+    serviceBaseUrl,
+} from './service-client';
 
 interface TargetProps {
     instance?: { id?: number; instanceType?: string; name?: string } | null;
@@ -28,6 +35,11 @@ const SEVERITY_COLORS: Record<string, string> = {
     warning: '#d48806',
     info: '#096dd9',
 };
+
+//: Mức độ lỗi tối thiểu sẽ được đẩy thành issue trên CVAT.
+type PublishSeverity = 'error' | 'warning' | 'info';
+
+const SEVERITY_RANK: Record<PublishSeverity, number> = { info: 1, warning: 2, error: 3 };
 
 const styles = {
     wrapper: { padding: '8px 0' } as React.CSSProperties,
@@ -49,6 +61,22 @@ const styles = {
     td: { borderBottom: '1px solid #f5f5f5', padding: '6px 8px', verticalAlign: 'top' as const },
     meta: { color: '#8c8c8c', fontSize: 12 },
     error: { color: SEVERITY_COLORS.error },
+    primaryButton: {
+        padding: '4px 12px',
+        border: '1px solid #1677ff',
+        borderRadius: 4,
+        background: '#1677ff',
+        color: '#fff',
+        cursor: 'pointer',
+    } as React.CSSProperties,
+    disabled: { opacity: 0.5, cursor: 'not-allowed' } as React.CSSProperties,
+    publishBox: {
+        border: '1px solid #f0f0f0',
+        borderRadius: 4,
+        padding: '8px 12px',
+        marginBottom: 12,
+        fontSize: 13,
+    } as React.CSSProperties,
 };
 
 /**
@@ -66,6 +94,11 @@ export function QAQCTab(props: QAQCTabProps): JSX.Element {
     const [severityFilter, setSeverityFilter] = useState<string>('all');
     // 'all' = mọi cấp độ, '1' = Level 1 (Overall/Completeness), '2' = Level 2 (Detailed)
     const [levelFilter, setLevelFilter] = useState<string>('1');
+    // Mức độ lỗi tối thiểu sẽ đẩy thành issue ('error' = chỉ đẩy lỗi error).
+    const [publishSeverity, setPublishSeverity] = useState<PublishSeverity>('error');
+    const [publishing, setPublishing] = useState(false);
+    const [publishResult, setPublishResult] = useState<PublishResult | null>(null);
+    const [publishError, setPublishError] = useState<string | null>(null);
 
     const load = useCallback(async (refresh: boolean): Promise<void> => {
         if (typeof taskId !== 'number') {
@@ -95,6 +128,55 @@ export function QAQCTab(props: QAQCTabProps): JSX.Element {
         const all = report?.issues ?? [];
         return severityFilter === 'all' ? all : all.filter((issue) => issue.severity === severityFilter);
     }, [report, severityFilter]);
+
+    const publish = useCallback(async (): Promise<void> => {
+        if (typeof taskId !== 'number') {
+            return;
+        }
+        const counts = report?.counts_by_severity ?? {};
+        const eligible = Object.entries(counts).reduce(
+            (sum, [severity, count]) =>
+                SEVERITY_RANK[severity as PublishSeverity] >= SEVERITY_RANK[publishSeverity]
+                    ? sum + count
+                    : sum,
+            0,
+        );
+        if (!eligible) {
+            setPublishResult(null);
+            setPublishError(
+                `Không có lỗi nào từ mức "${publishSeverity}" trở lên để đẩy. ` +
+                    'Hãy bấm "Chạy lại QA/QC" hoặc hạ mức lỗi cần đẩy.',
+            );
+            return;
+        }
+
+        const confirmed = window.confirm(
+            `Đẩy ${eligible} lỗi (từ mức "${publishSeverity}") của task #${taskId} thành issue trên CVAT?\n\n` +
+                'Issue nằm ở tab Issues của job tương ứng (mở task ở trang Annotate). ' +
+                'Bấm lại nút này không sinh issue trùng.',
+        );
+        if (!confirmed) {
+            return;
+        }
+
+        setPublishing(true);
+        setPublishError(null);
+        try {
+            const options = {
+                severity: publishSeverity,
+                ...(levelFilter === 'all' ? {} : { level: Number(levelFilter) }),
+            };
+            setPublishResult(await publishTaskIssues(taskId, options));
+            await load(false);
+        } catch (requestError: unknown) {
+            setPublishResult(null);
+            setPublishError(
+                requestError instanceof Error ? requestError.message : String(requestError),
+            );
+        } finally {
+            setPublishing(false);
+        }
+    }, [taskId, publishSeverity, levelFilter, report, load]);
 
     if (typeof taskId !== 'number') {
         return (
@@ -145,12 +227,58 @@ export function QAQCTab(props: QAQCTabProps): JSX.Element {
                     <option value="warning">Chỉ warning</option>
                     <option value="info">Chỉ info</option>
                 </select>
+                <select
+                    value={publishSeverity}
+                    onChange={(event) => setPublishSeverity(event.target.value as PublishSeverity)}
+                    style={{ padding: '4px 8px' }}
+                    title="Mức độ lỗi tối thiểu sẽ đẩy thành issue trên CVAT"
+                >
+                    <option value="error">Đẩy issue: chỉ error</option>
+                    <option value="warning">Đẩy issue: warning + error</option>
+                    <option value="info">Đẩy issue: tất cả mức độ</option>
+                </select>
+                <button
+                    type="button"
+                    style={{ ...styles.primaryButton, ...(publishing ? styles.disabled : {}) }}
+                    disabled={publishing || loading || !report}
+                    onClick={() => void publish()}
+                >
+                    {publishing ? 'Đang đẩy issue...' : 'Đẩy issue lên CVAT'}
+                </button>
                 <span style={styles.meta}>
                     Service:
                     {' '}
                     {serviceBaseUrl()}
                 </span>
             </div>
+
+            {publishError && (
+                <div style={{ ...styles.error, marginBottom: 12 }}>
+                    Không đẩy được issue lên CVAT: {publishError}
+                </div>
+            )}
+
+            {publishResult && (
+                <div style={styles.publishBox}>
+                    <strong>
+                        {publishResult.dry_run ? 'Mô phỏng (chưa ghi lên CVAT): ' : 'Đã đẩy issue: '}
+                    </strong>
+                    {`tạo mới ${publishResult.created}, mở lại ${publishResult.reopened}, `}
+                    {`đã tồn tại ${publishResult.skipped_existing}, lỗi ${publishResult.failed} `}
+                    {`(tổng ${publishResult.issues_total} lỗi, mức >= ${publishResult.min_severity})`}
+                    <div style={styles.meta}>
+                        Xem issue trong CVAT: mở task ở trang <strong>Annotate</strong> → panel phải →
+                        tab <strong>Issues</strong>. Mỗi issue gắn job + frame nên bấm vào là nhảy tới frame lỗi.
+                    </div>
+                    {!!publishResult.errors.length && (
+                        <ul style={{ ...styles.meta, marginBottom: 0 }}>
+                            {publishResult.errors.map((item) => (
+                                <li key={item}>{item}</li>
+                            ))}
+                        </ul>
+                    )}
+                </div>
+            )}
 
             {error && (
                 <div style={{ ...styles.error, marginBottom: 12 }}>

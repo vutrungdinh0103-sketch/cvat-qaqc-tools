@@ -1,0 +1,8 @@
+node_modules/
+venv/
+env/
+.git/
+*.log
+*.lock
+*.json (nếu là file data lớn)
+package-lock.json

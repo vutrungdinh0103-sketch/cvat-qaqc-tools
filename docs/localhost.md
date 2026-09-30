@@ -55,8 +55,12 @@ bật** (10 lỗi): box tràn khung, `width = 0`, box trùng nhau, biển số n
    Copy-Item .env.example .env
    ```
 
-   Điền `CVAT_HOST` (ví dụ `http://localhost:8080`) và `CVAT_USER`/`CVAT_PASS`
-   hoặc `CVAT_TOKEN` (khuyến nghị cho bot/CI).
+   Điền `CVAT_HOST` (ví dụ `http://localhost:8080`) và `CVAT_TOKEN` (khuyến nghị
+   cho bot/CI) hoặc `CVAT_USER`/`CVAT_PASS` — **phải là tài khoản có thật trên CVAT
+   của bạn** (đừng dùng `admin/admin` mẫu của `.env.example`; sai tài khoản thì
+   service vẫn chạy bình thường nhưng UI báo `HTTP 502` kèm *Unable to log in with
+   provided credentials*). Xem username thật:
+   `docker exec cvat_db psql -U root -d cvat -t -A -c "select username from auth_user;"`.
 
 2. Chạy service:
 
@@ -100,6 +104,7 @@ Tiện để kiểm thử/demo mà không cần server, hoặc khi đã export a
 | `GET /tasks/{id}/report` | Báo cáo JSON (schema `qaqc/1`, dùng cache theo `--cache-ttl`) |
 | `GET /tasks/{id}/report.csv` | Báo cáo CSV (UTF-8 BOM, mở bằng Excel được ngay) |
 | `POST /tasks/{id}/run` | Chạy QA/QC mới rồi trả báo cáo JSON (bỏ cache) |
+| `POST /tasks/{id}/publish` | Đẩy lỗi QA/QC thành issue trên CVAT (luôn chạy lại QA/QC, idempotent theo fingerprint) |
 
 Tham số query dùng chung cho `report`/`report.csv`/`run`:
 
@@ -110,6 +115,19 @@ Tham số query dùng chung cho `report`/`report.csv`/`run`:
 | `only` | `only=invalid_size,duplicate_bbox` | Chỉ chạy các rule này |
 | `disable` | `disable=empty_frame,tiny_box` | Tắt các rule này |
 | `refresh` | `refresh=true` | Bỏ cache, tính lại |
+
+`POST /tasks/{id}/publish` dùng thêm các tham số sau (và **luôn chạy lại QA/QC**, không
+dùng cache vì đây là thao tác ghi):
+
+| Tham số | Ví dụ | Ý nghĩa |
+| --- | --- | --- |
+| `severity` | `severity=warning` | Chỉ đẩy issue từ mức này trở lên (mặc định `error`) |
+| `dry_run` | `dry_run=true` | Xem trước số issue sẽ tạo, **không ghi** lên CVAT |
+| `reopen_resolved` | `reopen_resolved=false` | Không mở lại issue đã resolved (mặc định `true`) |
+| `resolve_stale` | `resolve_stale=true` | Đánh dấu đã xử lý issue cũ không còn lỗi |
+| `post_details` | `post_details=false` | Không đăng comment JSON chi tiết kèm issue |
+| `max_issues_per_job` | `max_issues_per_job=5` | Giới hạn số issue tạo cho mỗi job |
+| `max_issues_total` | `max_issues_total=20` | Giới hạn tổng số issue trong 1 lần gọi (`0` = không giới hạn) |
 
 Ví dụ bằng PowerShell:
 
@@ -128,6 +146,12 @@ $r.counts_by_rule
 
 # Tải CSV
 Invoke-WebRequest 'http://127.0.0.1:8081/tasks/42/report.csv?level=1' -OutFile reports\task_42.csv
+
+# Đẩy issue lên CVAT (mặc định chỉ lỗi `error`) - cần CVAT thật, không dùng --demo
+Invoke-RestMethod 'http://127.0.0.1:8081/tasks/42/publish?level=1' -Method Post
+
+# Xem trước, không ghi gì lên CVAT
+Invoke-RestMethod 'http://127.0.0.1:8081/tasks/42/publish?severity=warning&dry_run=true' -Method Post
 ```
 
 Ví dụ bằng `curl`:
@@ -136,11 +160,14 @@ Ví dụ bằng `curl`:
 curl 'http://127.0.0.1:8081/tasks/42/report?level=1&refresh=true'
 curl -X POST 'http://127.0.0.1:8081/tasks/42/run?level=1'
 curl -o task_42.csv 'http://127.0.0.1:8081/tasks/42/report.csv?level=1'
+curl -X POST 'http://127.0.0.1:8081/tasks/42/publish?severity=warning&dry_run=true'
 ```
 
-Mã lỗi: `400` cấu hình/đường dẫn rule sai (kể cả `level` khác 1/2) · `404` sai đường
-dẫn/task id · `405` gọi `GET /tasks/{id}/run` · `502` không lấy được dữ liệu (CVAT
-tắt/sai `.env`). Mọi lỗi đều trả JSON `{"error": "..."}` để UI hiển thị được.
+Mã lỗi: `400` cấu hình/đường dẫn rule sai (kể cả `level` khác 1/2, `severity` lạ) · `404`
+sai đường dẫn/task id · `405` gọi `GET /tasks/{id}/run` hoặc `GET /tasks/{id}/publish` ·
+`409` publish khi service chạy `--demo`/`--source-file` (không có CVAT để ghi) · `500`
+thiếu `cvat-sdk` · `502` không lấy được dữ liệu (CVAT tắt/sai `.env`). Mọi lỗi đều trả
+JSON `{"error": "..."}` để UI hiển thị được.
 
 ## 5. Ghép với plugin UI của CVAT (tuỳ chọn)
 
@@ -195,7 +222,10 @@ nội bộ tin cậy.
 | --- | --- |
 | Thoát ngay, `exit=2`, “Thiếu CVAT_HOST” | **Chưa tạo `.env`** — lệnh in sẵn đường dẫn `.env` bị thiếu và 4 cách sửa (gợi ý `--demo`, `Copy-Item .env.example .env`, truyền `--host/--user/--password`, hoặc `--env-file`). Dùng `python -m qaqc serve --demo --open` để xem thử ngay |
 | Thoát ngay, `exit=2`, “Thiếu thông tin xác thực CVAT” | `.env` có `CVAT_HOST` nhưng chưa có `CVAT_TOKEN` lẫn `CVAT_USER`/`CVAT_PASS` — bổ sung một trong hai |
-| UI báo `HTTP 502` | Không lấy được dữ liệu: CVAT tắt, sai `CVAT_HOST`/token, hoặc task không tồn tại |
+| UI báo `HTTP 502` (body có `Unable to log in with provided credentials`) | `.env` khai sai tài khoản/mật khẩu CVAT — thường do giữ nguyên `admin/admin` của `.env.example` trong khi tài khoản thật khác. Xem username thật: `docker exec cvat_db psql -U root -d cvat -t -A -c "select username from auth_user;"`; hoặc dùng Access Token (*Account → Security → Access tokens*) và khai `CVAT_TOKEN` |
+| UI báo `HTTP 502` (body khác) | Không lấy được dữ liệu: CVAT tắt, sai `CVAT_HOST`/token, hoặc task không tồn tại |
+| Tab QA/QC **từng hiện** rồi biến mất, trang QC chỉ còn tab *Requirements* | `cvat_ui` đã bị tạo lại bằng image gốc: chạy `docker compose up -d` (hoặc restart Docker Desktop) **thiếu file overlay** sẽ kéo `cvat/ui:v2.74.1` chạy lại (đã gặp thật). Kiểm tra `docker ps --format '{{.Names}} {{.Image}}'`; sửa: `docker compose -f docker-compose.yml -f docker-compose.qaqc.overlay.yml up -d --force-recreate cvat_ui` rồi Ctrl+Shift+R |
+| Build lại image plugin **cùng tag** nhưng tab vẫn là bản cũ | Compose so sánh cấu hình chứ không so sánh image id: phải `... up -d --force-recreate cvat_ui` (hoặc `docker rm -f cvat_ui` rồi up) mới nạp bundle mới |
 | UI báo `HTTP 400` | `rules` trỏ tới file `.yaml/.yml` không tồn tại, `only` chứa rule lạ, hoặc `level` khác 1/2 |
 | `401 Unauthorized` khi lấy dữ liệu | Token sai/hết hạn. Tool gửi `Authorization: Token <token>` (xem V20 trong [`verified-behaviors.md`](verified-behaviors.md)); tạo token mới ở *Account → Security → Access tokens* rồi cập nhật `.env` |
 | Task demo không có lỗi `required_attributes` | Attribute bắt buộc đang khai `default_value` → CVAT tự điền khi import (V22); bỏ `default_value` trong schema label |
@@ -222,7 +252,12 @@ python -m ruff format --check .
 - **Cache:** báo cáo được cache theo `(task_id, hash bộ rule)` trong `--cache-ttl`
   giây (mặc định 30) để UI bấm nhiều lần không phải tải lại annotation; `POST /run`
   và `refresh=true` luôn tính lại.
-- **Chỉ đọc:** service **không ghi** gì lên CVAT. Muốn đẩy lỗi thành issue
-  (idempotent), dùng `python -m qaqc publish ...` — xem `README.md`.
+- **Ghi lên CVAT:** mọi endpoint báo cáo (`report`, `report.csv`, `run`) là **chỉ đọc**;
+  riêng `POST /tasks/{id}/publish` **ghi** issue lên CVAT (idempotent theo fingerprint -
+  bấm lại chỉ báo `skipped_existing`, không sinh issue trùng). Chế độ
+  `--demo`/`--source-file` trả `409` vì không có CVAT để ghi, thiếu `cvat-sdk` → `500`,
+  không kết nối được CVAT → `502`.
+- **Vẫn có CLI:** cùng publisher đó chạy được bằng `python -m qaqc publish ...` (tiện cho
+  batch/CI, có `--dry-run`) — xem `README.md`.
 - **Giới hạn:** chạy đồng bộ trong process (phù hợp 1 máy, 1–vài người dùng). Nếu cần
   hàng đợi job/nhiều worker, xem mục “Lộ trình” trong `docs/architecture.md`.

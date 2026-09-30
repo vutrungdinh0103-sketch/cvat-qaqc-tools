@@ -87,6 +87,11 @@ class FakeClient:
         self.store: list[_Record] = []
         self.issues = _FakeIssuesRepo(self.store)
         self.comments = _FakeCommentsRepo()
+        self.closed = False
+
+    def close(self) -> None:
+        """Giống ``cvat_sdk.Client.close()`` - QA service luôn đóng client sau publish."""
+        self.closed = True
 
 
 # ---------------------------------------------------------------------------

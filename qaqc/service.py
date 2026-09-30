@@ -13,10 +13,17 @@ Endpoint **trùng khớp** với thứ mà plugin CVAT UI đang gọi
     GET  /tasks/{id}/report             → báo cáo JSON (có cache)
     GET  /tasks/{id}/report.csv         → báo cáo CSV (mở bằng Excel)
     POST /tasks/{id}/run                → chạy QA/QC mới rồi trả báo cáo JSON
+    POST /tasks/{id}/publish            → tạo issue trên CVAT từ lỗi tìm được
 
 Tham số query dùng chung: ``rules=`` (đường dẫn hoặc tên ngắn như ``driving_v1``),
 ``only=``/``disable=`` (danh sách rule, phân tách bằng dấu phẩy), ``refresh=true``
 (bỏ qua cache).
+
+Endpoint ``publish`` nhận thêm: ``severity=`` (mặc định ``error`` - chỉ đẩy lỗi từ
+mức này trở lên), ``dry_run=true`` (xem trước, không ghi), ``resolve_stale=true``,
+``reopen_resolved=false``, ``post_details=false``, ``max_issues_per_job=`` (mặc định
+50), ``max_issues_total=``. Đây là endpoint **ghi** lên CVAT nên luôn chạy QA/QC mới
+(không dùng cache) và trả ``409`` khi service chạy bằng ``--demo``/``--source-file``.
 
 CORS được bật (``Access-Control-Allow-Origin: *``) vì CVAT UI thường chạy ở
 origin khác (``http://localhost:8080``); service mặc định chỉ bind ``127.0.0.1``.
@@ -44,7 +51,7 @@ from . import SCHEMA_VERSION, __version__
 from .config import CVATConfig, RuleConfig, load_rule_config
 from .demo import build_demo_task
 from .engine import QAQCEngine
-from .model import TaskData
+from .model import Severity, TaskData
 from .normalize import build_task_data
 from .report import CSV_FIELDS, QAReport
 from .rules import registered_rule_ids, rule_ids_for_level, rule_level
@@ -53,7 +60,7 @@ from .webui import INDEX_HTML
 LOGGER = logging.getLogger("cvat_qaqc.service")
 
 #: Route API dùng chung với plugin CVAT UI: ``/tasks/<id>/<action>``.
-TASK_ROUTE = re.compile(r"^/tasks/(?P<task_id>\d+)/(?P<action>report|report\.csv|run)$")
+TASK_ROUTE = re.compile(r"^/tasks/(?P<task_id>\d+)/(?P<action>report|report\.csv|run|publish)$")
 
 #: Thư mục file cấu hình rule (cho phép truyền tên ngắn: ``?rules=driving_v1``).
 RULES_DIR = Path("rules")
@@ -63,6 +70,9 @@ RULE_SUFFIXES = (".yaml", ".yml")
 
 #: Cổng mặc định của service.
 DEFAULT_PORT = 8081
+
+#: Số issue tối đa tạo mới cho mỗi job trong một lần publish (0 = không giới hạn).
+DEFAULT_MAX_ISSUES_PER_JOB = 50
 
 
 class ServiceError(Exception):
@@ -302,12 +312,7 @@ class QAQCService:
                 LOGGER.info("Trả báo cáo task #%s từ cache.", task_id)
                 return cached
 
-        data = self._load_task_data_or_error(task_id)
-        report = QAQCEngine(config, max_issues=self.options.max_issues).run(data)
-
-        if self.options.cache_ttl > 0:
-            with self._lock:
-                self._cache[key] = (time.monotonic(), report)
+        report, _ = self.run_report(task_id, config)
         return report
 
     def report_payload(self, task_id: int, **kwargs: Any) -> dict[str, Any]:
@@ -322,6 +327,115 @@ class QAQCService:
         writer.writeheader()
         writer.writerows(report.to_csv_rows())
         return buffer.getvalue()
+
+    # ------------------------------------------------------------------
+    # Đẩy issue lên CVAT (``POST /tasks/{id}/publish``)
+    # ------------------------------------------------------------------
+    def run_report(self, task_id: int, config: RuleConfig) -> tuple[QAReport, TaskData]:
+        """Chạy QA/QC mới cho ``task_id``, ghi cache và trả kèm dữ liệu task.
+
+        Trả cả :class:`TaskData` vì publisher cần kích thước frame (để tính
+        ``position`` của issue) và danh sách job - nhờ vậy không phải gọi CVAT lần nữa.
+        """
+        data = self._load_task_data_or_error(task_id)
+        report = QAQCEngine(config, max_issues=self.options.max_issues).run(data)
+
+        if self.options.cache_ttl > 0:
+            with self._lock:
+                self._cache[(task_id, config.config_hash)] = (time.monotonic(), report)
+        return report, data
+
+    @staticmethod
+    def parse_publish_severity(value: str) -> Severity:
+        """Chuyển ``severity=`` (query string) thành :class:`Severity`.
+
+        :raises ServiceError: nếu giá trị không thuộc ``error``/``warning``/``info``.
+        """
+        allowed = [item.value for item in Severity]
+        text = str(value or "").strip().lower()
+        if text not in allowed:
+            raise ServiceError(
+                f"Tham số 'severity' phải là một trong: {', '.join(allowed)} (nhận được: {value!r})"
+            )
+        return Severity.parse(text, Severity.ERROR)
+
+    def publish_payload(
+        self,
+        task_id: int,
+        *,
+        rules: str | None = None,
+        only: str | None = None,
+        disable: str | None = None,
+        level: int | None = None,
+        severity: str = Severity.ERROR.value,
+        dry_run: bool = False,
+        reopen_resolved: bool = True,
+        resolve_stale: bool = False,
+        post_details: bool = True,
+        max_issues_per_job: int = DEFAULT_MAX_ISSUES_PER_JOB,
+        max_issues_total: int = 0,
+    ) -> dict[str, Any]:
+        """Chạy QA/QC mới rồi tạo *issue* trên CVAT từ các lỗi tìm được.
+
+        Dùng cho ``POST /tasks/{id}/publish`` (nút "Đẩy issue lên CVAT" của tab
+        QA/QC trong CVAT UI). Hàm luôn chạy lại QA/QC vì đây là thao tác ghi lên
+        CVAT; việc tạo issue là **idempotent** theo fingerprint (xem
+        :mod:`qaqc.publishers.cvat_issues`) nên bấm nhiều lần không sinh issue trùng.
+
+        :param severity: chỉ đẩy issue có mức độ >= giá trị này (mặc định ``error``).
+        :param dry_run: chỉ mô phỏng, không gọi API ghi của CVAT.
+        :param reopen_resolved: mở lại issue đã resolved nếu lỗi vẫn còn.
+        :param resolve_stale: đánh dấu resolved cho issue cũ không còn lỗi.
+        :param post_details: ghi comment JSON chi tiết kèm mỗi issue.
+        :raises ServiceError: chế độ ``--demo``/``--source-file``, tham số sai, hoặc
+            CVAT trả lỗi (mã HTTP tương ứng sẽ được trả về client).
+        """
+        min_severity = self.parse_publish_severity(severity)
+        config = self.rule_config(rules=rules, only=only, disable=disable, level=level)
+        report, data = self.run_report(task_id, config)
+
+        from .publishers.cvat_issues import CvatIssuePublisher  # import muộn: cần cvat_sdk
+
+        client = self._create_cvat_client()
+        try:
+            publisher = CvatIssuePublisher(
+                client,
+                dry_run=dry_run,
+                min_severity=min_severity,
+                max_issues_per_job=max_issues_per_job,
+                max_issues_total=max_issues_total,
+                reopen_resolved=reopen_resolved,
+                resolve_stale=resolve_stale,
+                post_details=post_details,
+            )
+            result = publisher.publish(report, data=data)
+        finally:
+            client.close()
+
+        LOGGER.info("Publish task #%s: %s", task_id, " | ".join(result.summary_lines()))
+        return {
+            "task_id": task_id,
+            "dry_run": result.dry_run,
+            "min_severity": min_severity.value,
+            "issues_total": len(report.issues),
+            "counts_by_severity": report.counts_by_severity,
+            "created": result.created,
+            "reopened": result.reopened,
+            "published": result.published,
+            "resolved_stale": result.resolved_stale,
+            "failed": result.failed,
+            "skipped_existing": result.skipped_existing,
+            "skipped_severity": result.skipped_severity,
+            "skipped_cap": result.skipped_cap,
+            "skipped_resolved": result.skipped_resolved,
+            "skipped_unmapped": result.skipped_unmapped,
+            "items": [
+                {"job_id": job_id, "frame": frame, "fingerprint": fingerprint}
+                for job_id, frame, fingerprint in result.created_items
+            ],
+            "errors": result.errors,
+            "summary": result.summary_lines(),
+        }
 
     def clear_cache(self) -> None:
         """Xoá cache báo cáo (dùng cho test)."""
@@ -350,12 +464,59 @@ class QAQCService:
             },
             "cache_ttl": self.options.cache_ttl,
             "cached_tasks": cached_tasks,
-            "data_endpoints": ["/tasks/{id}/report", "/tasks/{id}/report.csv", "/tasks/{id}/run"],
+            "data_endpoints": [
+                "/tasks/{id}/report",
+                "/tasks/{id}/report.csv",
+                "/tasks/{id}/run",
+                "/tasks/{id}/publish",
+            ],
+            #: ``False`` khi chạy bằng ``--demo``/``--source-file`` (không có CVAT để ghi).
+            "publish_supported": not (self.options.demo or bool(self.options.source_file)),
         }
 
     # ------------------------------------------------------------------
     # Nội bộ
     # ------------------------------------------------------------------
+    def _create_cvat_client(self) -> Any:
+        """Tạo ``cvat_sdk.Client`` theo cấu hình (.env/tham số CLI) để ghi lên CVAT.
+
+        :raises ServiceError: chế độ ``--demo``/``--source-file`` (``409``), thiếu
+            ``cvat-sdk`` (``500``) hoặc không kết nối được CVAT (``502``).
+        """
+        if self.options.demo or self.options.source_file:
+            raise ServiceError(
+                "Service đang chạy ở chế độ --demo/--source-file nên không đẩy được "
+                "issue lên CVAT. Hãy chạy 'python -m qaqc serve' với file .env trỏ "
+                "tới CVAT thật.",
+                HTTPStatus.CONFLICT,
+            )
+
+        try:
+            from cvat_sdk import exceptions  # import muộn: cần cvat_sdk
+        except ImportError as exc:  # pragma: no cover - phụ thuộc môi trường
+            raise ServiceError(
+                "Chưa cài 'cvat-sdk' nên không đẩy được issue lên CVAT. Cài bằng "
+                "'python -m pip install -r requirements.txt'.",
+                HTTPStatus.INTERNAL_SERVER_ERROR,
+            ) from exc
+
+        config = CVATConfig.from_env(
+            env_file=self.options.env_file,
+            host=self.options.host,
+            user=self.options.user,
+            password=self.options.password,
+            token=self.options.token,
+        )
+        try:
+            return config.create_client()
+        except ValueError as exc:
+            raise ServiceError(f"Lỗi cấu hình: {exc}") from exc
+        except (exceptions.CvatSdkException, OSError) as exc:
+            raise ServiceError(
+                f"Không kết nối được CVAT: {type(exc).__name__}: {exc}",
+                HTTPStatus.BAD_GATEWAY,
+            ) from exc
+
     def _cached(self, key: tuple[int, str]) -> QAReport | None:
         """Báo cáo còn hạn trong cache (``None`` nếu không có/hết hạn)."""
         with self._lock:
@@ -434,6 +595,7 @@ class QAQCHandler(BaseHTTPRequestHandler):
         self._guard(self._route_get)
 
     def do_POST(self) -> None:
+        # `run` = chạy QA/QC mới, `publish` = tạo issue trên CVAT (xem _route_post).
         """``POST /tasks/{id}/run`` - chạy QA/QC mới."""
         self._guard(self._route_post)
 
@@ -470,6 +632,12 @@ class QAQCHandler(BaseHTTPRequestHandler):
                 HTTPStatus.METHOD_NOT_ALLOWED,
             )
             return
+        if action == "publish":
+            self._send_json(
+                {"error": "Đẩy issue lên CVAT bằng POST /tasks/{id}/publish."},
+                HTTPStatus.METHOD_NOT_ALLOWED,
+            )
+            return
         if action == "report.csv":
             # utf-8-sig để Excel hiển thị đúng tiếng Việt
             content = self.service.report_csv(task_id, **params)
@@ -484,6 +652,18 @@ class QAQCHandler(BaseHTTPRequestHandler):
         query = parse_qs(parsed.query)
 
         match = TASK_ROUTE.match(path)
+        if match is not None and match.group("action") == "publish":
+            # `publish` dùng thêm tham số riêng (severity, dry_run...) và luôn chạy
+            # QA/QC mới -> bỏ `refresh` của _params rồi truyền tham số publish vào.
+            params = self._params(query)
+            params.pop("refresh", None)
+            self._send_json(
+                self.service.publish_payload(
+                    int(match.group("task_id")), **params, **self._publish_params(query)
+                )
+            )
+            return
+
         if match is None or match.group("action") != "run":
             self._send_json({"error": f"Endpoint không tồn tại: {path}"}, HTTPStatus.NOT_FOUND)
             return
@@ -491,6 +671,39 @@ class QAQCHandler(BaseHTTPRequestHandler):
         params = self._params(query)
         params["refresh"] = True  # POST = luôn chạy lại, không dùng cache
         self._send_json(self.service.report_payload(int(match.group("task_id")), **params))
+
+    @staticmethod
+    def _publish_params(query: dict[str, list[str]]) -> dict[str, Any]:
+        """Tham số riêng của ``POST /tasks/{id}/publish`` (lấy từ query string)."""
+
+        def first(name: str) -> str | None:
+            values = query.get(name)
+            return values[0] if values else None
+
+        def bool_param(name: str, default: bool) -> bool:
+            raw = first(name)
+            return default if raw is None or not str(raw).strip() else parse_bool(raw)
+
+        def int_param(name: str, default: int) -> int:
+            raw = first(name)
+            if raw is None or not str(raw).strip():
+                return default
+            try:
+                return int(str(raw).strip())
+            except ValueError as exc:
+                raise ServiceError(
+                    f"Tham số '{name}' phải là số nguyên (nhận được: {raw!r})"
+                ) from exc
+
+        return {
+            "severity": first("severity") or Severity.ERROR.value,
+            "dry_run": parse_bool(first("dry_run")),
+            "reopen_resolved": bool_param("reopen_resolved", True),
+            "resolve_stale": parse_bool(first("resolve_stale")),
+            "post_details": bool_param("post_details", True),
+            "max_issues_per_job": int_param("max_issues_per_job", DEFAULT_MAX_ISSUES_PER_JOB),
+            "max_issues_total": int_param("max_issues_total", 0),
+        }
 
     @staticmethod
     def _params(query: dict[str, list[str]]) -> dict[str, Any]:
@@ -599,6 +812,7 @@ def serve(
         print(f"Báo cáo JSON : {base_url}/tasks/<task_id>/report")
         print(f"Báo cáo CSV  : {base_url}/tasks/<task_id>/report.csv")
         print(f"Chạy QA/QC   : POST {base_url}/tasks/<task_id>/run")
+        print(f"Đẩy issue    : POST {base_url}/tasks/<task_id>/publish")
         print(f"Nguồn dữ liệu: {options.data_source_label()}")
         print(f"Cache báo cáo: {options.cache_ttl:g} giây")
         print("Nhấn Ctrl+C để dừng service.", flush=True)

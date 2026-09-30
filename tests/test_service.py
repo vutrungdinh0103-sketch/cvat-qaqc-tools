@@ -17,12 +17,14 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from test_publisher import FakeClient
 
 from qaqc import SCHEMA_VERSION, __version__
 from qaqc.cli import main as cli_main
 from qaqc.report import CSV_FIELDS, EXIT_CONFIG_ERROR
 from qaqc.rules import rule_ids_for_level
 from qaqc.service import (
+    QAQCHandler,
     QAQCServer,
     QAQCService,
     ServiceError,
@@ -381,3 +383,193 @@ def test_cli_serve_reports_missing_credentials(monkeypatch, tmp_path, capsys) ->
     err = capsys.readouterr().err
     assert "Thiếu thông tin xác thực CVAT" in err
     assert "Cách sửa:" in err
+
+
+# ---------------------------------------------------------------------------
+# POST /tasks/{id}/publish - đẩy issue lên CVAT (nút "Đẩy issue" trong tab QA/QC)
+# ---------------------------------------------------------------------------
+def _post_publish(base_url: str, query: str = "", task_id: int = 1) -> dict[str, Any]:
+    """Gọi ``POST /tasks/{id}/publish`` và trả payload JSON (assert ``200``)."""
+    return _get_json(f"{base_url}/tasks/{task_id}/publish{query}", "POST")
+
+
+def _fake_cvat_client(monkeypatch: pytest.MonkeyPatch) -> FakeClient:
+    """Thay client CVAT thật bằng client giả để test không gọi mạng."""
+    client = FakeClient()
+    monkeypatch.setattr(QAQCService, "_create_cvat_client", lambda self: client)
+    return client
+
+
+def test_publish_params_defaults() -> None:
+    """``_publish_params`` có mặc định khớp cờ của CLI ``qaqc publish``."""
+    params = QAQCHandler._publish_params({})
+
+    assert params["severity"] == "error"
+    assert params["dry_run"] is False
+    assert params["reopen_resolved"] is True
+    assert params["resolve_stale"] is False
+    assert params["post_details"] is True
+    assert params["max_issues_per_job"] == 50
+    assert params["max_issues_total"] == 0
+
+
+def test_publish_params_from_query_string() -> None:
+    """``_publish_params`` đọc tham số từ query (``true``/``false``/``1``/``0``)."""
+    params = QAQCHandler._publish_params(
+        {
+            "severity": ["warning"],
+            "dry_run": ["true"],
+            "reopen_resolved": ["false"],
+            "resolve_stale": ["1"],
+            "post_details": ["0"],
+            "max_issues_per_job": ["3"],
+            "max_issues_total": ["7"],
+        }
+    )
+
+    assert params["severity"] == "warning"
+    assert params["dry_run"] is True
+    assert params["reopen_resolved"] is False
+    assert params["resolve_stale"] is True
+    assert params["post_details"] is False
+    assert params["max_issues_per_job"] == 3
+    assert params["max_issues_total"] == 7
+
+
+def test_publish_params_rejects_bad_integer() -> None:
+    """``?max_issues_per_job=abc`` → ``400`` nêu rõ tên tham số sai."""
+    with pytest.raises(ServiceError) as excinfo:
+        QAQCHandler._publish_params({"max_issues_per_job": ["abc"]})
+
+    assert "max_issues_per_job" in str(excinfo.value)
+    assert excinfo.value.status == HTTPStatus.BAD_REQUEST
+
+
+def test_parse_publish_severity() -> None:
+    """``severity=`` hợp lệ (kể cả hoa/thường) được parse, giá trị lạ bị từ chối."""
+    assert QAQCService.parse_publish_severity("WARNING").value == "warning"
+    assert QAQCService.parse_publish_severity("info").value == "info"
+
+    for bad in ("", "nghiem-trong"):
+        with pytest.raises(ServiceError) as excinfo:
+            QAQCService.parse_publish_severity(bad)
+        assert "severity" in str(excinfo.value)
+        assert "error, warning, info" in str(excinfo.value)
+
+
+def test_get_publish_is_method_not_allowed(http_base_url: str) -> None:
+    """``GET /tasks/{id}/publish`` → ``405`` kèm gợi ý dùng ``POST``."""
+    status, _, body = _request(f"{http_base_url}/tasks/1/publish")
+
+    assert status == HTTPStatus.METHOD_NOT_ALLOWED
+    assert "POST" in json.loads(body.decode("utf-8"))["error"]
+
+
+def test_publish_in_demo_mode_returns_conflict(http_base_url: str) -> None:
+    """Chế độ ``--demo`` không có CVAT để ghi → ``409`` kèm cách sửa."""
+    status, _, body = _request(f"{http_base_url}/tasks/1/publish", "POST")
+
+    assert status == HTTPStatus.CONFLICT
+    message = json.loads(body.decode("utf-8"))["error"]
+    assert "--demo" in message
+    assert "python -m qaqc serve" in message
+
+
+def test_publish_creates_issues(http_base_url: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    """``POST /publish`` tạo issue trên CVAT rồi trả đủ số liệu cho UI hiển thị."""
+    client = _fake_cvat_client(monkeypatch)
+
+    payload = _post_publish(http_base_url, "?severity=info")
+
+    assert payload["dry_run"] is False
+    assert payload["min_severity"] == "info"
+    assert payload["created"] > 0
+    assert payload["published"] >= payload["created"]
+    assert len(client.store) == payload["created"]
+    assert payload["issues_total"] >= payload["created"]
+    assert payload["items"]
+    assert payload["summary"]
+    assert client.closed is True
+
+
+def test_publish_second_run_is_idempotent(
+    http_base_url: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Bấm "Đẩy issue" lần 2: không tạo trùng, chỉ báo ``skipped_existing``."""
+    client = _fake_cvat_client(monkeypatch)
+
+    first = _post_publish(http_base_url, "?severity=warning")
+    second = _post_publish(http_base_url, "?severity=warning")
+
+    assert first["created"] > 0
+    assert second["created"] == 0
+    assert second["skipped_existing"] == first["created"]
+    assert len(client.store) == first["created"]
+
+
+def test_publish_dry_run_writes_nothing(
+    http_base_url: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``?dry_run=true`` chỉ mô phỏng: báo số issue sẽ tạo nhưng không ghi gì."""
+    client = _fake_cvat_client(monkeypatch)
+
+    payload = _post_publish(http_base_url, "?severity=info&dry_run=true")
+
+    assert payload["dry_run"] is True
+    assert payload["created"] > 0
+    assert client.store == []
+
+
+def test_publish_without_details_posts_no_comment(
+    http_base_url: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``?post_details=false`` không ghi comment JSON chi tiết."""
+    client = _fake_cvat_client(monkeypatch)
+
+    _post_publish(http_base_url, "?severity=error&post_details=false")
+
+    assert client.comments.comments == []
+
+
+def test_publish_uses_only_filter_of_report(
+    http_base_url: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``?only=`` tác động cả lần chạy publish (dùng chung tham số với ``report``)."""
+    _fake_cvat_client(monkeypatch)
+
+    payload = _post_publish(http_base_url, "?severity=info&only=invalid_size")
+    report = _get_json(f"{http_base_url}/tasks/1/report?only=invalid_size&refresh=true")
+
+    assert payload["issues_total"] == len(report["issues"])
+
+
+def test_publish_rejects_unknown_severity(
+    http_base_url: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``?severity=`` sai → ``400`` và liệt kê các giá trị hợp lệ."""
+    _fake_cvat_client(monkeypatch)
+
+    status, _, body = _request(f"{http_base_url}/tasks/1/publish?severity=nghiem-trong", "POST")
+
+    assert status == HTTPStatus.BAD_REQUEST
+    message = json.loads(body.decode("utf-8"))["error"]
+    assert "severity" in message
+    assert "error, warning, info" in message
+
+
+def test_publish_bad_integer_returns_400(http_base_url: str) -> None:
+    """``?max_issues_per_job=abc`` → ``400`` (không chạy QA/QC)."""
+    status, _, body = _request(f"{http_base_url}/tasks/1/publish?max_issues_per_job=abc", "POST")
+
+    assert status == HTTPStatus.BAD_REQUEST
+    assert "max_issues_per_job" in json.loads(body.decode("utf-8"))["error"]
+
+
+def test_health_advertises_publish_support() -> None:
+    """``/health`` liệt kê endpoint publish + cho biết có ghi được lên CVAT không."""
+    demo = QAQCService(ServiceOptions(demo=True)).health()
+    assert "/tasks/{id}/publish" in demo["data_endpoints"]
+    assert demo["publish_supported"] is False
+
+    real = QAQCService(ServiceOptions(host="http://localhost:8080", token="x")).health()
+    assert real["publish_supported"] is True
